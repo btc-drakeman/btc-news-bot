@@ -65,6 +65,7 @@ def check_news():
             for rss_url in RSS_URLS:
                 feed = feedparser.parse(rss_url)
                 for entry in feed.entries:
+                    print(f"뉴스 제목: {entry.title}")
                     if not hasattr(entry, 'published_parsed'):
                         continue
 
@@ -95,6 +96,7 @@ def check_news():
                         message += f"\n\n{sentiment}"
 
                         send_telegram(message)
+                        print(f"텔레그램 메시지 전송 시도: {title}")
                         sent_items.add(item_id)
         except Exception as e:
             print(f"뉴스 체크 중 오류 발생: {e}")
