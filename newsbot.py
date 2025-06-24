@@ -22,7 +22,7 @@ RSS_URLS = [
 ]
 
 sent_items = set()
-ALERT_TIME_WINDOW = 600  # 10분 이내 뉴스만 알림
+ALERT_TIME_WINDOW = 1200  # 20분 이내 뉴스만 알림
 
 POSITIVE_WORDS = [
     'gain', 'rise', 'surge', 'bull', 'profit', 'increase', 'positive', 'upgrade', 'growth', 'record'
