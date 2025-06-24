@@ -36,6 +36,7 @@ def send_telegram(text):
     data = {'chat_id': USER_ID, 'text': text, 'parse_mode': 'HTML'}
     try:
         requests.post(url, data=data)
+        print(f"텔레그램 메시지 전송 성공: {text[:30]}...")  # 전송 로그
     except Exception as e:
         print(f"텔레그램 전송 오류: {e}")
 
@@ -65,7 +66,8 @@ def check_news():
             for rss_url in RSS_URLS:
                 feed = feedparser.parse(rss_url)
                 for entry in feed.entries:
-                    print(f"뉴스 제목: {entry.title}")
+                    print(f"뉴스 제목: {entry.title}")  # 뉴스 제목 로그 출력
+
                     if not hasattr(entry, 'published_parsed'):
                         continue
 
@@ -96,7 +98,8 @@ def check_news():
                         message += f"\n\n{sentiment}"
 
                         send_telegram(message)
-                        print(f"텔레그램 메시지 전송 시도: {title}")
+                        print(f"텔레그램 메시지 전송 시도: {title}")  # 전송 시도 로그
+
                         sent_items.add(item_id)
         except Exception as e:
             print(f"뉴스 체크 중 오류 발생: {e}")
@@ -113,12 +116,13 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-def run_bot():
-    check_news()
-
 if __name__ == "__main__":
     print("🟢 뉴스 봇 및 Flask 서버 시작 중...")
     flask_thread = Thread(target=run_flask)
     flask_thread.start()
 
-    run_bot()
+    news_thread = Thread(target=check_news)
+    news_thread.start()
+
+    news_thread.join()
+    flask_thread.join()
