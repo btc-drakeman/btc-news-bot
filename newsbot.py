@@ -5,7 +5,7 @@ from flask import Flask
 from threading import Thread
 import os
 
-# 텔레그램 봇 토큰과 사용자 채팅 ID (본인 것으로 변경하세요)
+# 텔레그램 봇 토큰과 사용자 채팅 ID
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
@@ -22,7 +22,7 @@ RSS_URLS = [
 ]
 
 sent_items = set()
-ALERT_TIME_WINDOW = 600  # 10분 (초 단위)
+ALERT_TIME_WINDOW = 1200  # 20분 (초 단위)
 
 POSITIVE_WORDS = [
     'gain', 'rise', 'surge', 'bull', 'profit', 'increase', 'positive', 'upgrade', 'growth', 'record'
@@ -63,6 +63,7 @@ def analyze_sentiment_simple(text):
 def check_news():
     while True:
         try:
+            print("🔍 뉴스 체크 시작")  # ← 여기 추가됨
             now = time.time()
             for rss_url in RSS_URLS:
                 feed = feedparser.parse(rss_url)
@@ -87,7 +88,6 @@ def check_news():
 
                     if any(keyword in title_lc or keyword in summary_lc for keyword in KEYWORDS):
                         short_summary = summarize_text(summary) if summary else ''
-
                         sentiment_text = title + ". " + short_summary
                         sentiment = analyze_sentiment_simple(sentiment_text)
 
