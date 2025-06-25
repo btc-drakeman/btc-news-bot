@@ -1,11 +1,11 @@
 import requests
 import feedparser
 import time
-from flask import Flask
+from flask import
+# 텔레그램 봇 토큰과 사 Flask
 from threading import Thread
 import os
-
-# 텔레그램 봇 토큰과 사용자 채팅 ID
+용자 채팅 ID (본인 것으로 변경하세요)
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
@@ -22,7 +22,7 @@ RSS_URLS = [
 ]
 
 sent_items = set()
-ALERT_TIME_WINDOW = 1200  # 20분 (초 단위)
+ALERT_TIME_WINDOW = 600  # 10분 (초 단위)
 
 POSITIVE_WORDS = [
     'gain', 'rise', 'surge', 'bull', 'profit', 'increase', 'positive', 'upgrade', 'growth', 'record'
@@ -61,32 +61,42 @@ def analyze_sentiment_simple(text):
         return "⚖️ Neutral Impact Expected"
 
 def check_news():
+    print("🔍 뉴스 체크 시작")
     while True:
         try:
-            print("🔍 뉴스 체크 시작")  # ← 여기 추가됨
             now = time.time()
             for rss_url in RSS_URLS:
+                print(f"📡 RSS 피드 가져오는 중: {rss_url}")
                 feed = feedparser.parse(rss_url)
+                print(f"📰 총 뉴스 수: {len(feed.entries)}")
+
                 for entry in feed.entries:
                     if not hasattr(entry, 'published_parsed'):
+                        print("⚠️ published_parsed 없음, 건너뜀")
                         continue
 
                     published_time = time.mktime(entry.published_parsed)
-                    if now - published_time > ALERT_TIME_WINDOW:
-                        continue
-
                     title = entry.title.strip()
                     summary = entry.summary.strip() if hasattr(entry, 'summary') else ''
                     link = entry.link
 
+                    print(f"⏰ 뉴스 시간: {published_time}, 현재 시간: {now}")
+                    print(f"📰 제목: {title}")
+
+                    if now - published_time > ALERT_TIME_WINDOW:
+                        print("⏱️ 너무 오래된 뉴스, 건너뜀")
+                        continue
+
                     item_id = f"{title}-{entry.published}"
                     if item_id in sent_items:
+                        print("🔁 이미 전송된 뉴스, 건너뜀")
                         continue
 
                     title_lc = title.lower()
                     summary_lc = summary.lower()
 
                     if any(keyword in title_lc or keyword in summary_lc for keyword in KEYWORDS):
+                        print("✅ 키워드 매칭됨")
                         short_summary = summarize_text(summary) if summary else ''
                         sentiment_text = title + ". " + short_summary
                         sentiment = analyze_sentiment_simple(sentiment_text)
@@ -98,9 +108,12 @@ def check_news():
 
                         send_telegram(message)
                         sent_items.add(item_id)
-                        print(f"뉴스 발송 완료: {title}")
+                        print(f"📤 뉴스 전송 완료: {title}")
+                    else:
+                        print("❌ 키워드 미매칭")
+
         except Exception as e:
-            print(f"뉴스 체크 중 오류 발생: {e}")
+            print(f"🔥 뉴스 체크 중 오류 발생: {e}")
 
         time.sleep(60)
 
