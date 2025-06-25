@@ -19,6 +19,8 @@ KEYWORDS = [
 RSS_URLS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
     'https://cointelegraph.com/rss',
+    'https://www.reuters.com/rssFeed/cryptocurrencyNews',
+    'https://www.bloomberg.com/crypto/rss',
 ]
 
 sent_items = set()
