@@ -1,11 +1,11 @@
 import requests
 import feedparser
 import time
-from flask import
-# 텔레그램 봇 토큰과 사 Flask
+from flask import Flask
 from threading import Thread
 import os
-용자 채팅 ID (본인 것으로 변경하세요)
+
+# 텔레그램 봇 토큰과 사용자 채팅 ID (본인 것으로 변경하세요)
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
