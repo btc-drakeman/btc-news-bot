@@ -119,7 +119,8 @@ def check_news():
 
         time.sleep(60)
 
-app = Flask('')
+# Flask 앱
+app = Flask(__name__)
 
 @app.route('/')
 def home():
@@ -129,12 +130,19 @@ def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-def run_bot():
-    check_news()
-
 if __name__ == "__main__":
-    print("🟢 뉴스 봇 및 Flask 서버 시작 중...")
+    print("🟢 Render 실행 환경: Flask + 뉴스봇 스레드 시작")
+
+    # Flask 서버 쓰레드
     flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
     flask_thread.start()
 
-    run_bot()
+    # 뉴스 체크 쓰레드
+    news_thread = Thread(target=check_news)
+    news_thread.daemon = True
+    news_thread.start()
+
+    # 메인 쓰레드는 살아 있어야 함
+    while True:
+        time.sleep(60)
