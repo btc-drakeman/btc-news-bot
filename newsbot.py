@@ -4,8 +4,9 @@ import time
 from flask import Flask
 from threading import Thread
 import os
+import re
 
-# 텔레그램 봇 토큰과 사용자 채팅 ID (본인 것으로 변경하세요)
+# 텔레그램 봇 토큰과 사용자 채팅 ID
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
@@ -32,6 +33,11 @@ POSITIVE_WORDS = [
 NEGATIVE_WORDS = [
     'drop', 'fall', 'decline', 'bear', 'loss', 'decrease', 'negative', 'hack', 'crash', 'sell'
 ]
+
+# 🔧 HTML 태그 제거 함수
+def clean_html(raw_html):
+    cleanr = re.compile('<.*?>')
+    return re.sub(cleanr, '', raw_html)
 
 def send_telegram(text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
@@ -80,6 +86,8 @@ def check_news():
                     published_time = time.mktime(entry.published_parsed)
                     title = entry.title.strip()
                     summary = entry.summary.strip() if hasattr(entry, 'summary') else ''
+                    summary = clean_html(summary)  # ✅ HTML 제거
+
                     link = entry.link
 
                     print(f"⏰ 뉴스 시간: {published_time}, 현재 시간: {now}")
@@ -133,16 +141,13 @@ def run_flask():
 if __name__ == "__main__":
     print("🟢 Render 실행 환경: Flask + 뉴스봇 스레드 시작")
 
-    # Flask 서버 쓰레드
     flask_thread = Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
-    # 뉴스 체크 쓰레드
     news_thread = Thread(target=check_news)
     news_thread.daemon = True
     news_thread.start()
 
-    # 메인 쓰레드는 살아 있어야 함
     while True:
         time.sleep(60)
