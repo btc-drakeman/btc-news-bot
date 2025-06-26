@@ -7,9 +7,9 @@ from flask import Flask
 from threading import Thread
 import os
 
-# 텔레그램 설정
-BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
-USER_ID = 'YOUR_TELEGRAM_USER_ID'
+# 텔레그램 봇 토큰과 사용자 채팅 ID
+BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
+USER_ID = '7505401062'
 
 # 키워드 리스트
 KEYWORDS = [
