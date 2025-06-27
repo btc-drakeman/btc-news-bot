@@ -1,10 +1,19 @@
-# Python 3.12.10 슬림 버전 사용
-FROM python:3.12.10-slim
+# Python 3.11 슬림 버전 사용 (3.12 대신 안정적인 버전으로 변경)
+FROM python:3.10-slim
 
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# 의존성 먼저 복사 (캐시 활용 위해)
+# OS 레벨 빌드 의존성 설치
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    python3-dev \
+    libatlas-base-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# requirements.txt 복사
 COPY requirements.txt .
 
 # pip 최신화 + 의존성 설치
