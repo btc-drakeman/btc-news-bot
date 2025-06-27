@@ -22,9 +22,10 @@ KEYWORDS = [
 # RSS 주소
 RSS_URLS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
-    'https://cointelegraph.com/rss'
+    'https://cointelegraph.com/rss',
+    'http://rss.cnn.com/rss/cnn_topstories.rss',           # CNN 속보
+    'https://www.reutersagency.com/feed/?taxonomy=best-sectors&post_type=best',  # Reuters 속보
 ]
-
 sent_items = set()
 ALERT_TIME_WINDOW = 600  # 뉴스 유효시간: 10분
 POSITIVE_WORDS = ['gain', 'rise', 'surge', 'bull', 'profit', 'increase', 'positive', 'upgrade', 'growth', 'record']
@@ -60,27 +61,21 @@ def analyze_sentiment_simple(text):
     else:
         return "⚖️ 중립적 뉴스로 판단됨"
 
-# MEXC 실시간 가격 조회
-def get_current_btc_price_mexc():
-    try:
-        url = "https://api.mexc.com/api/v3/ticker/price?symbol=BTCUSDT"
-        res = requests.get(url)
-        price = float(res.json()['price'])
-        return price
-    except Exception as e:
-        print(f"❌ MEXC 가격 가져오기 오류: {e}")
-        return None
-
-# 기술 분석 (가격은 MEXC, 기술지표는 CoinGecko)
+# Binance API로 기술 분석
 def get_btc_technical_summary():
-    url = 'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart'
-    params = {'vs_currency': 'usd', 'days': '1', 'interval': 'minute'}
+    url = "https://api.binance.com/api/v3/klines"
+    params = {
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "limit": 100
+    }
     try:
         res = requests.get(url, params=params).json()
-        prices = res['prices'][-100:]  # 최근 100분
+        prices = [(item[0], float(item[4])) for item in res]  # timestamp, 종가
         df = pd.DataFrame(prices, columns=['timestamp', 'price'])
         df['price'] = df['price'].astype(float)
-
+        
+        # 기술 지표 계산
         df['rsi'] = ta.rsi(df['price'], length=14)
         macd = ta.macd(df['price'])
         df = pd.concat([df, macd], axis=1)
@@ -88,7 +83,7 @@ def get_btc_technical_summary():
         rsi_now = df['rsi'].iloc[-1]
         macd_now = df['MACD_12_26_9'].iloc[-1]
         signal_now = df['MACDs_12_26_9'].iloc[-1]
-        price_now = get_current_btc_price_mexc()
+        price_now = df['price'].iloc[-1]
 
         macd_trend = "골든크로스" if macd_now > signal_now else "데드크로스"
         rsi_status = "과매도" if rsi_now < 30 else ("과매수" if rsi_now > 70 else "중립")
@@ -101,15 +96,15 @@ def get_btc_technical_summary():
             advice = "⚖️ 중립 구간으로 판단됩니다"
 
         msg = (
-            f"📊 <b>BTC 기술 분석 (15분 간격)</b>\n"
-            f"💰 현재가 (MEXC): ${price_now:,.2f}\n"
+            f"📊 <b>BTC 기술 분석 (1분 간격)</b>\n"
+            f"💰 현재가 (Binance): ${price_now:,.2f}\n"
             f"📈 RSI: {rsi_now:.1f} ({rsi_status})\n"
             f"📉 MACD: {macd_trend}\n\n"
             f"{advice}"
         )
         return msg
     except Exception as e:
-        print(f"❌ 기술 분석 오류: {e}")
+        print(f"❌ Binance 기술 분석 오류: {e}")
         return None
 
 # 뉴스 체크 루프
@@ -177,6 +172,3 @@ if __name__ == '__main__':
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))).start()
     Thread(target=check_news).start()
     Thread(target=check_tech_loop).start()
-    
-    # 배포 즉시 테스트 메시지 보내기
-    send_telegram("🚀 봇 시작 테스트 메시지!")
