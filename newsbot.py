@@ -169,6 +169,8 @@ def home():
 # 실행
 if __name__ == '__main__':
     print("🟢 Flask + 뉴스 + 기술지표 봇 시작")
-    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))).start()
+    port = int(os.environ.get('PORT', 8080))  # 기본값 8080
+    Thread(target=lambda: app.run(host='0.0.0.0', port=port)).start()
     Thread(target=check_news).start()
     Thread(target=check_tech_loop).start()
+
