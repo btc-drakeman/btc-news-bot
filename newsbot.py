@@ -8,8 +8,8 @@ import pandas as pd
 from datetime import datetime
 
 # 텔레그램 설정
-BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-USER_ID = '7505401062'
+BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'  # 본인 토큰으로 교체하세요
+USER_ID = '7505401062'  # 본인 ID로 교체하세요
 
 # 주요 키워드
 KEYWORDS = [
@@ -19,16 +19,17 @@ KEYWORDS = [
     'trump', 'fed', 'fed decision', 'central bank', 'government', 'policy'
 ]
 
-# RSS 주소 (원하는 사이트로 추가 가능)
+# RSS 주소
 RSS_URLS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
     'https://cointelegraph.com/rss',
-    'http://rss.cnn.com/rss/cnn_topstories.rss',
-    'http://feeds.reuters.com/reuters/topNews'
+    'https://www.cnn.com/services/rss/',
+    'http://feeds.reuters.com/reuters/technologyNews'
 ]
 
 sent_items = set()
-ALERT_TIME_WINDOW = 600  # 뉴스 유효시간: 10분
+ALERT_TIME_WINDOW = 600  # 10분
+
 POSITIVE_WORDS = ['gain', 'rise', 'surge', 'bull', 'profit', 'increase', 'positive', 'upgrade', 'growth', 'record']
 NEGATIVE_WORDS = ['drop', 'fall', 'decline', 'bear', 'loss', 'decrease', 'negative', 'hack', 'crash', 'sell']
 
@@ -37,9 +38,11 @@ def send_telegram(text):
     data = {'chat_id': USER_ID, 'text': text, 'parse_mode': 'HTML'}
     try:
         response = requests.post(url, data=data)
-        print("✅ 텔레그램 응답 코드:", response.status_code)
+        print(f"✅ 텔레그램 응답 코드: {response.status_code}")
+        return response
     except Exception as e:
         print(f"❌ 텔레그램 전송 오류: {e}")
+        return None
 
 def summarize_text(text, max_sentences=3):
     sentences = text.split('. ')
@@ -63,31 +66,30 @@ def get_btc_technical_summary():
     try:
         url = 'https://api.binance.com/api/v3/klines'
         params = {'symbol': 'BTCUSDT', 'interval': '1m', 'limit': 100}
-        res = requests.get(url, params=params)
+        res = requests.get(url, params=params, timeout=10)
+        res.raise_for_status()
         data = res.json()
-
-        print(f"Binance API 응답 상태코드: {res.status_code}")
-        print(f"Binance API 응답 데이터 일부: {data[:2]}")  # 데이터 일부 출력
-
         if not isinstance(data, list) or len(data) == 0:
             raise ValueError("binance api가 유효한 데이터를 반환하지 않았습니다.")
 
         closes = [float(candle[4]) for candle in data]
         df = pd.DataFrame(closes, columns=['close'])
 
-        # RSI 계산 (단순화, rolling 14)
+        # RSI 계산
         delta = df['close'].diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+
         avg_gain = gain.rolling(window=14, min_periods=14).mean()
         avg_loss = loss.rolling(window=14, min_periods=14).mean()
+
         rs = avg_gain / avg_loss
         df['rsi'] = 100 - (100 / (1 + rs))
 
         # MACD 계산
-        df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
-        df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
-        df['macd'] = df['ema12'] - df['ema26']
+        ema12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema26 = df['close'].ewm(span=26, adjust=False).mean()
+        df['macd'] = ema12 - ema26
         df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
 
         rsi_now = df['rsi'].iloc[-1]
@@ -119,6 +121,7 @@ def get_btc_technical_summary():
 
 def check_news():
     print("🚀 뉴스 체크 쓰레드 시작")
+    print("✅ check_news 루프 진입")
     while True:
         try:
             now = time.time()
@@ -127,13 +130,16 @@ def check_news():
                 for entry in feed.entries:
                     if not hasattr(entry, 'published_parsed'):
                         continue
+
                     published_time = time.mktime(entry.published_parsed)
                     if now - published_time > ALERT_TIME_WINDOW:
                         continue
+
                     title = entry.title.strip()
                     summary = entry.summary.strip() if hasattr(entry, 'summary') else ''
                     link = entry.link
-                    item_id = f"{title}-{entry.published}" if hasattr(entry, 'published') else title
+                    item_id = f"{title}-{entry.published}"
+
                     if item_id in sent_items:
                         continue
 
@@ -149,21 +155,29 @@ def check_news():
                         if tech_summary:
                             message += f"\n\n{tech_summary}"
 
-                        send_telegram(message)
-                        sent_items.add(item_id)
+                        resp = send_telegram(message)
+                        if resp and resp.status_code == 200:
+                            sent_items.add(item_id)
+                        else:
+                            print("⚠️ 텔레그램 전송 실패, 재시도하지 않음")
+
         except Exception as e:
             print(f"❌ 뉴스 확인 중 오류: {e}")
         time.sleep(60)
 
 def check_tech_loop():
     print("🚀 기술분석 체크 쓰레드 시작")
+    print("✅ check_tech_loop 루프 진입")
     while True:
         try:
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"⏰ check_tech_loop tick: {now}")
+            print(f"⏰ check_tech_loop tick: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             msg = get_btc_technical_summary()
             if msg:
-                send_telegram(msg)
+                print("🟢 기술분석 메시지 생성 성공, 텔레그램 전송 시도 중...")
+                response = send_telegram(msg)
+                print(f"📨 텔레그램 전송 응답: {response.status_code if response else '전송 실패'}")
+            else:
+                print("⚠️ 기술분석 메시지 생성 실패")
         except Exception as e:
             print(f"❌ 기술 분석 전송 오류: {e}")
         time.sleep(900)  # 15분
