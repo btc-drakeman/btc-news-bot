@@ -11,7 +11,6 @@ import pandas_ta as ta
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
-# 주요 키워드
 KEYWORDS = [
     'sec', 'regulation', 'bitcoin regulation', 'fomc', 'interest rate', 'inflation',
     'btc', 'bitcoin', 'institutional investor', 'exchange', 'listing', 'delisting',
@@ -19,37 +18,32 @@ KEYWORDS = [
     'trump', 'fed', 'fed decision', 'central bank', 'government', 'policy'
 ]
 
-# RSS 주소
 RSS_URLS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
     'https://cointelegraph.com/rss',
-    'http://rss.cnn.com/rss/cnn_topstories.rss',           # CNN 속보
-    'https://www.reutersagency.com/feed/?taxonomy=best-sectors&post_type=best',  # Reuters 속보
+    'http://rss.cnn.com/rss/cnn_latest.rss',
+    'http://feeds.reuters.com/reuters/topNews'
 ]
+
 sent_items = set()
-ALERT_TIME_WINDOW = 600  # 뉴스 유효시간: 10분
+ALERT_TIME_WINDOW = 600
 POSITIVE_WORDS = ['gain', 'rise', 'surge', 'bull', 'profit', 'increase', 'positive', 'upgrade', 'growth', 'record']
 NEGATIVE_WORDS = ['drop', 'fall', 'decline', 'bear', 'loss', 'decrease', 'negative', 'hack', 'crash', 'sell']
 
-# 텔레그램 메시지 전송 함수
 def send_telegram(text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     data = {'chat_id': USER_ID, 'text': text, 'parse_mode': 'HTML'}
     try:
         response = requests.post(url, data=data)
-        print("✅ 텔레그램 응답 코드:", response.status_code)
+        print(f"✅ 텔레그램 응답 코드: {response.status_code}")
     except Exception as e:
         print(f"❌ 텔레그램 전송 오류: {e}")
 
-# 뉴스 요약
 def summarize_text(text, max_sentences=3):
     sentences = text.split('. ')
     summary = '. '.join(sentences[:max_sentences])
-    if not summary.endswith('.'):
-        summary += '.'
-    return summary
+    return summary if summary.endswith('.') else summary + '.'
 
-# 간단한 감성분석
 def analyze_sentiment_simple(text):
     text_lc = text.lower()
     pos = sum(word in text_lc for word in POSITIVE_WORDS)
@@ -61,21 +55,23 @@ def analyze_sentiment_simple(text):
     else:
         return "⚖️ 중립적 뉴스로 판단됨"
 
-# Binance API로 기술 분석
+def get_current_btc_price_binance():
+    try:
+        url = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+        res = requests.get(url)
+        price = float(res.json()['price'])
+        return price
+    except Exception as e:
+        print(f"❌ 바이낸스 가격 가져오기 오류: {e}")
+        return None
+
 def get_btc_technical_summary():
-    url = "https://api.binance.com/api/v3/klines"
-    params = {
-        "symbol": "BTCUSDT",
-        "interval": "1m",
-        "limit": 100
-    }
+    url = 'https://api.binance.com/api/v3/klines'
+    params = {'symbol': 'BTCUSDT', 'interval': '1m', 'limit': 100}
     try:
         res = requests.get(url, params=params).json()
-        prices = [(item[0], float(item[4])) for item in res]  # timestamp, 종가
-        df = pd.DataFrame(prices, columns=['timestamp', 'price'])
-        df['price'] = df['price'].astype(float)
-        
-        # 기술 지표 계산
+        closes = [float(kline[4]) for kline in res]
+        df = pd.DataFrame(closes, columns=['price'])
         df['rsi'] = ta.rsi(df['price'], length=14)
         macd = ta.macd(df['price'])
         df = pd.concat([df, macd], axis=1)
@@ -83,7 +79,7 @@ def get_btc_technical_summary():
         rsi_now = df['rsi'].iloc[-1]
         macd_now = df['MACD_12_26_9'].iloc[-1]
         signal_now = df['MACDs_12_26_9'].iloc[-1]
-        price_now = df['price'].iloc[-1]
+        price_now = get_current_btc_price_binance()
 
         macd_trend = "골든크로스" if macd_now > signal_now else "데드크로스"
         rsi_status = "과매도" if rsi_now < 30 else ("과매수" if rsi_now > 70 else "중립")
@@ -96,7 +92,7 @@ def get_btc_technical_summary():
             advice = "⚖️ 중립 구간으로 판단됩니다"
 
         msg = (
-            f"📊 <b>BTC 기술 분석 (1분 간격)</b>\n"
+            f"📊 <b>BTC 기술 분석 (1분봉 기준)</b>\n"
             f"💰 현재가 (Binance): ${price_now:,.2f}\n"
             f"📈 RSI: {rsi_now:.1f} ({rsi_status})\n"
             f"📉 MACD: {macd_trend}\n\n"
@@ -104,11 +100,11 @@ def get_btc_technical_summary():
         )
         return msg
     except Exception as e:
-        print(f"❌ Binance 기술 분석 오류: {e}")
+        print(f"❌ 기술 분석 오류: {e}")
         return None
 
-# 뉴스 체크 루프
 def check_news():
+    print("✅ check_news 루프 진입")
     while True:
         try:
             now = time.time()
@@ -117,7 +113,6 @@ def check_news():
                 for entry in feed.entries:
                     if not hasattr(entry, 'published_parsed'):
                         continue
-
                     published_time = time.mktime(entry.published_parsed)
                     if now - published_time > ALERT_TIME_WINDOW:
                         continue
@@ -132,7 +127,6 @@ def check_news():
 
                     title_lc = title.lower()
                     summary_lc = summary.lower()
-
                     if any(keyword in title_lc or keyword in summary_lc for keyword in KEYWORDS):
                         short_summary = summarize_text(summary)
                         sentiment = analyze_sentiment_simple(title + ". " + short_summary)
@@ -148,8 +142,8 @@ def check_news():
             print(f"❌ 뉴스 확인 중 오류: {e}")
         time.sleep(60)
 
-# 15분 간격 기술 분석 전송 루프
 def check_tech_loop():
+    print("✅ check_tech_loop 루프 진입")
     while True:
         try:
             msg = get_btc_technical_summary()
@@ -157,20 +151,18 @@ def check_tech_loop():
                 send_telegram(msg)
         except Exception as e:
             print(f"❌ 기술 분석 전송 오류: {e}")
-        time.sleep(900)  # 15분
+        time.sleep(900)
 
-# Flask 서버 (Render용)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "✅ BTC 뉴스 + 기술분석 봇 작동 중!"
 
-# 실행
 if __name__ == '__main__':
     print("🟢 Flask + 뉴스 + 기술지표 봇 시작")
-    port = int(os.environ.get('PORT', 8080))  # 기본값 8080
-    Thread(target=lambda: app.run(host='0.0.0.0', port=port)).start()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))).start()
+    print("🚀 뉴스 체크 쓰레드 시작")
     Thread(target=check_news).start()
+    print("🚀 기술분석 체크 쓰레드 시작")
     Thread(target=check_tech_loop).start()
-
