@@ -1,5 +1,3 @@
-# 비트코인 뉴스 + 기술지표 알림 통합 봇 (MEXC 가격 반영)
-
 import requests
 import feedparser
 import time
@@ -115,7 +113,6 @@ def get_btc_technical_summary():
         return None
 
 # 뉴스 체크 루프
-
 def check_news():
     while True:
         try:
@@ -180,3 +177,6 @@ if __name__ == '__main__':
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))).start()
     Thread(target=check_news).start()
     Thread(target=check_tech_loop).start()
+    
+    # 배포 즉시 테스트 메시지 보내기
+    send_telegram("🚀 봇 시작 테스트 메시지!")
