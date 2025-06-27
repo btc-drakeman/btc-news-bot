@@ -5,22 +5,32 @@ from flask import Flask
 from threading import Thread
 import os
 import pandas as pd
+from datetime import datetime
 
 # 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
+# 주요 키워드
+KEYWORDS = [
+    'sec', 'regulation', 'bitcoin regulation', 'fomc', 'interest rate', 'inflation',
+    'btc', 'bitcoin', 'institutional investor', 'exchange', 'listing', 'delisting',
+    'hack', 'fork', 'upgrade', 'network upgrade', 'elon musk', 'musk',
+    'trump', 'fed', 'fed decision', 'central bank', 'government', 'policy'
+]
 
+# RSS 주소
 RSS_URLS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
     'https://cointelegraph.com/rss',
-    'http://rss.cnn.com/rss/cnn_latest.rss',
-    'http://feeds.reuters.com/reuters/topNews'
+    'http://rss.cnn.com/rss/edition_us.rss',
+    'http://feeds.reuters.com/reuters/USTopNews'
 ]
 
 sent_items = set()
-ALERT_TIME_WINDOW = 600
+ALERT_TIME_WINDOW = 600  # 뉴스 유효시간: 10분
 
+# 텔레그램 메시지 전송 함수
 def send_telegram(text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     data = {'chat_id': USER_ID, 'text': text, 'parse_mode': 'HTML'}
@@ -30,6 +40,43 @@ def send_telegram(text):
     except Exception as e:
         print(f"❌ 텔레그램 전송 오류: {e}")
 
+# 뉴스 체크 루프
+def check_news():
+    print("🚀 뉴스 체크 쓰레드 시작")
+    while True:
+        print("✅ check_news 루프 진입")
+        try:
+            now = time.time()
+            for rss_url in RSS_URLS:
+                feed = feedparser.parse(rss_url)
+                for entry in feed.entries:
+                    if not hasattr(entry, 'published_parsed'):
+                        continue
+
+                    published_time = time.mktime(entry.published_parsed)
+                    if now - published_time > ALERT_TIME_WINDOW:
+                        continue
+
+                    title = entry.title.strip()
+                    summary = entry.summary.strip() if hasattr(entry, 'summary') else ''
+                    link = entry.link
+                    item_id = f"{title}-{entry.published}"
+
+                    if item_id in sent_items:
+                        continue
+
+                    title_lc = title.lower()
+                    summary_lc = summary.lower()
+
+                    if any(keyword in title_lc or keyword in summary_lc for keyword in KEYWORDS):
+                        message = f"🚨 <b>{title}</b>\n🔗 {link}\n\n📝 {summary}"
+                        send_telegram(message)
+                        sent_items.add(item_id)
+        except Exception as e:
+            print(f"❌ 뉴스 확인 중 오류: {e}")
+        time.sleep(60)
+
+# 기술 분석 함수
 def get_btc_technical_summary():
     try:
         url = 'https://api.binance.com/api/v3/klines'
@@ -76,50 +123,22 @@ def get_btc_technical_summary():
         print(f"❌ 기술 분석 오류: {e}")
         return None
 
-def check_news():
-    print("🚀 뉴스 체크 쓰레드 시작")
-    while True:
-        print("✅ check_news 루프 진입")
-        try:
-            now = time.time()
-            for rss_url in RSS_URLS:
-                feed = feedparser.parse(rss_url)
-                for entry in feed.entries:
-                    if not hasattr(entry, 'published_parsed'):
-                        continue
-                    published_time = time.mktime(entry.published_parsed)
-                    if now - published_time > ALERT_TIME_WINDOW:
-                        continue
-                    title = entry.title.strip()
-                    summary = entry.summary.strip() if hasattr(entry, 'summary') else ''
-                    link = entry.link
-                    item_id = f"{title}-{entry.published}"
-                    if item_id in sent_items:
-                        continue
-                    if any(keyword in title.lower() + summary.lower() for keyword in ['btc', 'bitcoin', 'trump']):
-                        message = f"🚨 <b>{title}</b>\n🔗 {link}\n\n📝 {summary}"
-                        send_telegram(message)
-                        sent_items.add(item_id)
-            time.sleep(60)
-        except Exception as e:
-            print(f"❌ 뉴스 확인 중 오류: {e}")
-            time.sleep(60)
-
+# 기술 분석 전송 루프
 def check_tech_loop():
     print("🚀 기술분석 체크 쓰레드 시작")
     while True:
-        print(f"⏰ check_tech_loop tick: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"⏰ check_tech_loop tick: {now}")
+        send_telegram("✅ check_tech_loop tick 알림 테스트")
         try:
             msg = get_btc_technical_summary()
             if msg:
                 send_telegram(msg)
-                print("✅ 기술분석 메시지 전송 완료")
-            else:
-                print("⚠️ 기술분석 메시지 없음")
         except Exception as e:
             print(f"❌ 기술 분석 전송 오류: {e}")
         time.sleep(900)  # 15분
 
+# Flask 서버
 app = Flask(__name__)
 
 @app.route('/')
