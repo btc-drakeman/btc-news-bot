@@ -5,20 +5,18 @@ from flask import Flask
 from threading import Thread
 from datetime import datetime
 
-# 텔레그램 설정
+# 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
 
-# 코인 & 타임프레임
+# 분석할 코인 및 시간대
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
-TIMEFRAMES = {'10m': '10m', '1h': '1h'}
+TIMEFRAMES = {'10m': '10m'}  # 1분은 내부판단용, 알림은 10분만 사용
 
 app = Flask(__name__)
 
-
 def debug_log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-
 
 def send_telegram(text):
     for user_id in USER_IDS:
@@ -26,10 +24,9 @@ def send_telegram(text):
         data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
         try:
             response = requests.post(url, data=data)
-            debug_log(f"📨 메시지 전송 성공 → {user_id}")
+            debug_log(f"메시지 전송 완료 → {user_id}")
         except Exception as e:
-            debug_log(f"❌ 텔레그램 전송 실패 → {user_id}: {e}")
-
+            debug_log(f"❌ 텔레그램 전송 실패 (chat_id={user_id}): {e}")
 
 def fetch_ohlcv(symbol, interval):
     url = f"https://api.mexc.com/api/v3/klines"
@@ -41,16 +38,14 @@ def fetch_ohlcv(symbol, interval):
         closes = [float(x[4]) for x in data]
         volumes = [float(x[5]) for x in data]
         df = pd.DataFrame({"close": closes, "volume": volumes})
-        debug_log(f"✅ {symbol} {interval} 데이터 수신 완료")
+        debug_log(f"{symbol} {interval} 데이터 수신 완료")
         return df, closes[-1]
     except Exception as e:
-        debug_log(f"❌ {symbol} {interval} 데이터 요청 실패: {e}")
+        debug_log(f"❌ {symbol} ({interval}) 데이터 요청 실패: {e}")
         return None, None
-
 
 def calculate_indicators(df):
     try:
-        # RSI
         delta = df['close'].diff()
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
@@ -59,17 +54,14 @@ def calculate_indicators(df):
         rs = avg_gain / avg_loss
         df['rsi'] = 100 - (100 / (1 + rs))
 
-        # MACD
         ema_12 = df['close'].ewm(span=12, adjust=False).mean()
         ema_26 = df['close'].ewm(span=26, adjust=False).mean()
         df['macd'] = ema_12 - ema_26
         df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
 
-        # EMA
         df['ema_20'] = df['close'].ewm(span=20).mean()
         df['ema_50'] = df['close'].ewm(span=50).mean()
 
-        # 볼린저 밴드
         df['bollinger_mid'] = df['close'].rolling(window=20).mean()
         df['bollinger_std'] = df['close'].rolling(window=20).std()
         df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
@@ -79,7 +71,6 @@ def calculate_indicators(df):
     except Exception as e:
         debug_log(f"❌ 지표 계산 오류: {e}")
         return None
-
 
 def analyze_symbol(symbol):
     results = []
@@ -98,11 +89,6 @@ def analyze_symbol(symbol):
         score = 0
         parts = []
 
-        if pd.isna(last['rsi']):
-            debug_log(f"⚠️ RSI NaN 발생 → {symbol} {tf}")
-            continue
-
-        # 점수 평가
         if last['rsi'] < 30:
             score += 1
             parts.append("RSI 과매도")
@@ -129,7 +115,7 @@ def analyze_symbol(symbol):
         else:
             parts.append("EMA 20<50")
 
-        if df['volume'].iloc[-1] > df['volume'].rolling(20).mean().iloc[-1]:
+        if df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]:
             score += 1
             parts.append("거래량 ↑")
         else:
@@ -142,22 +128,17 @@ def analyze_symbol(symbol):
         else:
             status = f"⚖️ 관망 ({score}/5)"
 
-        results.append((f"⏱️ {label} → {status}", f"({', '.join(parts)})"))
+        result = f"<b>{symbol} 기술분석 리포트</b>\n" \
+                 f"<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n" \
+                 f"<b>⏱️ {label} 분석결과</b> → {status}\n" \
+                 f"📌 {' / '.join(parts)}"
+
+        results.append(result)
 
     if not results:
-        debug_log(f"⚠️ {symbol} 분석 결과 없음 → 메시지 미전송")
-        return f"⚠️ <b>{symbol}</b> 분석 불가: 데이터 부족 또는 지표 오류"
+        return f"⚠️ {symbol} 분석 불가: 데이터 부족 또는 지표 오류"
 
-    final_text = f"""
-📊 <b>{symbol} 다중 분석</b>
-<code>(RSI, MACD, 볼린저밴드, EMA, 거래량 기반)</code>
-🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-""" + "\n".join([f"{r} {s}" for r, s in results])
-
-    debug_log(f"📨 메시지 구성 완료 → {symbol}")
-    return final_text
-
+    return "\n\n".join(results)
 
 def analysis_loop():
     while True:
@@ -170,11 +151,9 @@ def analysis_loop():
         debug_log("⏳ 10분 대기 후 재분석")
         time.sleep(600)
 
-
 @app.route('/')
 def home():
     return "✅ MEXC 기술분석 봇 작동 중!"
-
 
 if __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
