@@ -4,14 +4,15 @@ import time
 from flask import Flask
 from threading import Thread
 from datetime import datetime
+import numpy as np
 
 # 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-USER_IDS = ['7505401062', '7576776181']
+USER_IDS = ['7505401062', '7576776181']  # ✅ 사용자 목록
 
-# 분석할 코인 및 시간대
+# 분석할 코인 리스트
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
-TIMEFRAMES = {'10m': '10m'}  # 1분은 내부판단용, 알림은 10분만 사용
+TIMEFRAMES = {'1m': '1m', '5m': '5m'}  # ✅ 10m → 5m 변경
 
 app = Flask(__name__)
 
@@ -30,7 +31,7 @@ def send_telegram(text):
 
 def fetch_ohlcv(symbol, interval):
     url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": 200}
+    params = {"symbol": symbol, "interval": interval, "limit": 150}  # 넉넉하게 요청
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
@@ -121,6 +122,9 @@ def analyze_symbol(symbol):
         else:
             parts.append("거래량 ↓")
 
+        if label == '1m':
+            continue  # 1분봉은 내부 판단용, 표시 X
+
         if score >= 4:
             status = f"🟢 강매 ({score}/5)"
         elif score <= 2:
@@ -128,17 +132,20 @@ def analyze_symbol(symbol):
         else:
             status = f"⚖️ 관망 ({score}/5)"
 
-        result = f"<b>{symbol} 기술분석 리포트</b>\n" \
-                 f"<code>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n" \
-                 f"<b>⏱️ {label} 분석결과</b> → {status}\n" \
-                 f"📌 {' / '.join(parts)}"
-
-        results.append(result)
+        result = f"⏱️ {label} → {status}"
+        subinfo = f"({', '.join(parts)})"
+        results.append((result, subinfo))
 
     if not results:
-        return f"⚠️ {symbol} 분석 불가: 데이터 부족 또는 지표 오류"
+        return None
 
-    return "\n\n".join(results)
+    final_text = f"""
+📊 <b>{symbol} 기술분석 리포트</b>
+🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+""" + "\n".join([f"{r} {s}" for r, s in results])
+
+    return final_text
 
 def analysis_loop():
     while True:
@@ -147,6 +154,8 @@ def analysis_loop():
             msg = analyze_symbol(symbol)
             if msg:
                 send_telegram(msg)
+            else:
+                send_telegram(f"⚠️ {symbol} 분석 불가: 데이터 부족 또는 지표 오류")
             time.sleep(3)
         debug_log("⏳ 10분 대기 후 재분석")
         time.sleep(600)
