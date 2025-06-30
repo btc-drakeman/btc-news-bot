@@ -7,7 +7,7 @@ from datetime import datetime
 
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
 
 app = Flask(__name__)
 
