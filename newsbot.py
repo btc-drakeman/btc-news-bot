@@ -1,80 +1,28 @@
 import requests
 import pandas as pd
 import time
-from flask import Flask, request
+from flask import Flask
 from threading import Thread
 from datetime import datetime
-import os
 
 # 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-user_ids = {
-    '7505401062',  # 당신
-    '7576776181'   # 친구
-}
+USER_IDS = ['7505401062', '7576776181']  # ✅ 사용자 목록
 
 # 분석할 코인 리스트
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
 
 app = Flask(__name__)
 
-
-def load_user_ids():
-    if not os.path.exists(USER_IDS_FILE):
-        return set()
-    with open(USER_IDS_FILE, 'r') as f:
-        return set(line.strip() for line in f if line.strip().isdigit())
-
-
-def save_user_id(user_id):
-    user_ids = load_user_ids()
-    if str(user_id) not in user_ids:
-        with open(USER_IDS_FILE, 'a') as f:
-            f.write(f"{user_id}\n")
-        print(f"✅ 새로운 사용자 등록됨: {user_id}")
-
-
 def send_telegram(text):
-    user_ids = load_user_ids()
-    for uid in user_ids:
+    for user_id in USER_IDS:
         url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-        data = {'chat_id': uid, 'text': text, 'parse_mode': 'HTML'}
+        data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
         try:
             response = requests.post(url, data=data)
+            print(f"메시지 전송됨 → {user_id}")
         except Exception as e:
-            print(f"텔레그램 전송 오류 ({uid}): {e}")
-
-
-@app.route(f"/bot{BOT_TOKEN}", methods=['POST'])
-def telegram_webhook():
-    data = request.get_json()
-    if not data or 'message' not in data:
-        return '', 200
-
-    message = data['message']
-    chat_id = message['chat']['id']
-    text = message.get('text', '')
-
-    if text == "/start":
-        save_user_id(chat_id)
-        send_telegram("👋 알림에 성공적으로 등록되었습니다!")
-
-    elif text == "/stop":
-        current_ids = load_user_ids()
-        if str(chat_id) in current_ids:
-            current_ids.remove(str(chat_id))
-            with open(USER_IDS_FILE, 'w') as f:
-                for uid in current_ids:
-                    f.write(f"{uid}\n")
-            send_telegram("🔕 알림이 해제되었습니다.")
-
-    return '', 200
-
-
-@app.route('/')
-def home():
-    return "✅ MEXC 기술분석 봇 작동 중!"
-
+            print(f"텔레그램 전송 오류 (chat_id={user_id}): {e}")
 
 def fetch_ohlcv(symbol):
     url = f"https://api.mexc.com/api/v3/klines"
@@ -90,7 +38,6 @@ def fetch_ohlcv(symbol):
     except Exception as e:
         print(f"{symbol} 데이터 요청 실패: {e}")
         return None, None
-
 
 def analyze_symbol(symbol):
     df, price_now = fetch_ohlcv(symbol)
@@ -195,7 +142,6 @@ def analyze_symbol(symbol):
 
     return msg
 
-
 def analysis_loop():
     while True:
         for symbol in SYMBOLS:
@@ -206,8 +152,11 @@ def analysis_loop():
             time.sleep(3)
         time.sleep(600)
 
+@app.route('/')
+def home():
+    return "✅ MEXC 기술분석 봇 작동 중!"
 
 if __name__ == '__main__':
-    print("🟢 전체 통합 봇 실행 시작")
+    print("🟢 기술분석 봇 실행 시작")
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop).start()
