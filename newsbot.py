@@ -12,9 +12,9 @@ BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_ID = '7505401062'
 
 # 분석 대상 심볼
-SYMBOLS = ['BTCUSDT', 'SEIUSDT', 'VIRTUALUSDT', 'ETHUSDT', 'ETHFIUSDT', 'XRPUSDT']
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
 
-# 텔레그램 메시지 전송
+# 텔레그램 전송
 def send_telegram(text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     data = {'chat_id': USER_ID, 'text': html.escape(text), 'parse_mode': 'HTML'}
@@ -26,26 +26,35 @@ def send_telegram(text):
         print(f"❌ 텔레그램 전송 오류: {e}")
         return None
 
-# RSI + MACD 기술 분석
+# 분석 함수
 def analyze_symbol(symbol):
     try:
         print(f"📥 {symbol} 데이터 요청 중...")
         url = "https://api.mexc.com/api/v3/klines"
-        params = {
-            "symbol": symbol,
-            "interval": "1m",
-            "limit": 100
-        }
+        params = {"symbol": symbol, "interval": "1m", "limit": 100}
         res = requests.get(url, params=params)
         res.raise_for_status()
         data = res.json()
-        if len(data) < 50:
-            raise ValueError("시세 데이터 부족")
 
-        closes = [float(candle[4]) for candle in data]
-        df = pd.DataFrame(closes, columns=['close'])
+        closes = [float(c[4]) for c in data]
+        highs = [float(c[2]) for c in data]
+        lows = [float(c[3]) for c in data]
+        volumes = [float(c[5]) for c in data]
 
-        # RSI 계산
+        df = pd.DataFrame({
+            'close': closes,
+            'high': highs,
+            'low': lows,
+            'volume': volumes
+        })
+
+        score = 0
+        reasons = []
+
+        # 현재가
+        price_now = df['close'].iloc[-1]
+
+        # RSI
         delta = df['close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
@@ -54,43 +63,71 @@ def analyze_symbol(symbol):
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
         rsi_now = rsi.iloc[-1]
-        rsi_status = "과매도" if rsi_now < 30 else ("과매수" if rsi_now > 70 else "중립")
+        if 35 <= rsi_now <= 45:
+            score += 1
+            reasons.append(f"✅ RSI ({rsi_now:.1f}): 과매도 회복 구간")
 
-        # MACD 계산
-        ema12 = df['close'].ewm(span=12, adjust=False).mean()
-        ema26 = df['close'].ewm(span=26, adjust=False).mean()
+        # MACD
+        ema12 = df['close'].ewm(span=12).mean()
+        ema26 = df['close'].ewm(span=26).mean()
         df['macd'] = ema12 - ema26
-        df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['signal'] = df['macd'].ewm(span=9).mean()
         macd_now = df['macd'].iloc[-1]
         signal_now = df['signal'].iloc[-1]
         macd_status = "골든크로스" if macd_now > signal_now else "데드크로스"
+        if macd_now > signal_now:
+            score += 1
+            reasons.append("✅ MACD: 골든크로스")
+
+        # 볼린저밴드
+        ma20 = df['close'].rolling(window=20).mean()
+        std = df['close'].rolling(window=20).std()
+        upper = ma20 + (2 * std)
+        lower = ma20 - (2 * std)
+        if price_now > ma20.iloc[-1] and price_now < upper.iloc[-1]:
+            score += 1
+            reasons.append("✅ 볼린저: 중심선 이상 & 상단 여유")
+
+        # EMA 위치
+        ema20 = df['close'].ewm(span=20).mean()
+        ema50 = df['close'].ewm(span=50).mean()
+        if price_now > ema20.iloc[-1] and price_now > ema50.iloc[-1]:
+            score += 1
+            reasons.append("✅ EMA: 20/50 상단에 위치")
+
+        # 거래량
+        vol_now = df['volume'].iloc[-1]
+        vol_avg = df['volume'].rolling(window=10).mean().iloc[-1]
+        if vol_now > vol_avg * 1.2:
+            score += 1
+            reasons.append(f"✅ 거래량 증가: +{(vol_now/vol_avg - 1)*100:.1f}%")
 
         # 종합 판단
-        if rsi_now < 30 and macd_now > signal_now:
-            advice = "🟢 매수 타이밍으로 판단됩니다"
-        elif rsi_now > 70 and macd_now < signal_now:
-            advice = "🔴 매도 주의 타이밍입니다"
+        if score >= 4:
+            final_msg = "🟢 ▶️ 종합 분석: 강한 매수 신호 감지"
+        elif score >= 2:
+            final_msg = "⚖️ ▶️ 종합 분석: 관망 구간"
         else:
-            advice = "⚖️ 중립 구간입니다"
+            final_msg = "🔴 ▶️ 종합 분석: 매도 주의 신호"
 
-        price_now = df['close'].iloc[-1]
-        print(f"📊 {symbol} 분석 완료")
-
-        return (
+        # 메시지 생성
+        msg = (
             f"📊 <b>{symbol} 기술 분석 (MEXC)</b>\n"
             f"💰 현재가: ${price_now:,.4f}\n"
-            f"📈 RSI: {rsi_now:.1f} ({rsi_status})\n"
+            f"📈 RSI: {rsi_now:.1f}\n"
             f"📉 MACD: {macd_status}\n\n"
-            f"{advice}"
+            + "\n".join(reasons) +
+            f"\n\n{final_msg} (점수: {score}/5)"
         )
+        return msg
 
     except Exception as e:
         print(f"❌ {symbol} 분석 오류: {e}")
         return None
 
-# 루프 실행: 모든 코인 분석
+# 루프 실행
 def check_tech_loop():
-    print("📉 멀티코인 기술 분석 루프 시작")
+    print("📉 기술 분석 루프 시작")
     while True:
         try:
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -98,29 +135,26 @@ def check_tech_loop():
             for symbol in SYMBOLS:
                 msg = analyze_symbol(symbol)
                 if msg:
-                    print(f"📨 {symbol} 메시지 전송 중...")
-                    response = send_telegram(msg)
-                    print(f"✅ {symbol} 전송 응답: {response.status_code if response else '실패'}")
+                    send_telegram(msg)
                 else:
                     print(f"⚠️ {symbol} 메시지 없음")
         except Exception as e:
-            print(f"❌ 기술 분석 루프 오류: {e}")
+            print(f"❌ 루프 오류: {e}")
         time.sleep(900)  # 15분
 
-# Flask 서버 설정
+# Flask 앱
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ 멀티코인 RSI+MACD 봇 작동 중!"
+    return "✅ 종합 기술분석 봇 작동 중!"
 
 @app.route('/test')
 def test():
-    print("🧪 /test 요청 수신")
-    send_telegram("✅ [테스트] 멀티코인 기술 분석 봇 정상 작동 중입니다.")
+    send_telegram("✅ [테스트] 종합 분석 봇 작동 확인")
     return "✅ 테스트 메시지 전송됨"
 
-# 실행 시작
+# 실행
 if __name__ == '__main__':
     print("🟢 봇 실행 시작")
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=False, use_reloader=False)).start()
