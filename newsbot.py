@@ -4,15 +4,14 @@ import time
 from flask import Flask
 from threading import Thread
 from datetime import datetime
-import numpy as np
 
-# 텔레그램 봇 설정
+# 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-USER_IDS = ['7505401062', '7576776181']  # ✅ 사용자 목록
+USER_IDS = ['7505401062', '7576776181']
 
-# 분석할 코인 리스트
+# 분석 대상
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
-TIMEFRAMES = {'1m': '1m', '5m': '5m'}  # ✅ 10m → 5m 변경
+TIMEFRAMES = {'1m': '1m', '5m': '5m'}  # 다중 타임프레임 분석
 
 app = Flask(__name__)
 
@@ -30,8 +29,8 @@ def send_telegram(text):
             debug_log(f"❌ 텔레그램 전송 실패 (chat_id={user_id}): {e}")
 
 def fetch_ohlcv(symbol, interval):
-    url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": 150}  # 넉넉하게 요청
+    url = "https://api.mexc.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": interval, "limit": 150}  # ⬅️ 더 넉넉한 limit
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
@@ -39,7 +38,7 @@ def fetch_ohlcv(symbol, interval):
         closes = [float(x[4]) for x in data]
         volumes = [float(x[5]) for x in data]
         df = pd.DataFrame({"close": closes, "volume": volumes})
-        debug_log(f"{symbol} {interval} 데이터 수신 완료")
+        debug_log(f"✅ {symbol} {interval} 데이터 수신 완료")
         return df, closes[-1]
     except Exception as e:
         debug_log(f"❌ {symbol} ({interval}) 데이터 요청 실패: {e}")
@@ -50,15 +49,15 @@ def calculate_indicators(df):
         delta = df['close'].diff()
         gain = delta.where(delta > 0, 0.0)
         loss = -delta.where(delta < 0, 0.0)
-        avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        avg_gain = gain.ewm(alpha=1/14, min_periods=14).mean()
+        avg_loss = loss.ewm(alpha=1/14, min_periods=14).mean()
         rs = avg_gain / avg_loss
         df['rsi'] = 100 - (100 / (1 + rs))
 
-        ema_12 = df['close'].ewm(span=12, adjust=False).mean()
-        ema_26 = df['close'].ewm(span=26, adjust=False).mean()
+        ema_12 = df['close'].ewm(span=12).mean()
+        ema_26 = df['close'].ewm(span=26).mean()
         df['macd'] = ema_12 - ema_26
-        df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['signal'] = df['macd'].ewm(span=9).mean()
 
         df['ema_20'] = df['close'].ewm(span=20).mean()
         df['ema_50'] = df['close'].ewm(span=50).mean()
@@ -79,11 +78,12 @@ def analyze_symbol(symbol):
 
     for label, tf in TIMEFRAMES.items():
         df, price_now = fetch_ohlcv(symbol, tf)
-        if df is None:
+        if df is None or price_now is None:
             continue
 
         df = calculate_indicators(df)
-        if df is None:
+        if df is None or df.isnull().values.any():
+            debug_log(f"⚠️ {symbol} {tf} 분석 중단: NaN 포함")
             continue
 
         last = df.iloc[-1]
@@ -91,39 +91,31 @@ def analyze_symbol(symbol):
         parts = []
 
         if last['rsi'] < 30:
-            score += 1
-            parts.append("RSI 과매도")
+            score += 1; parts.append("RSI 과매도")
         elif last['rsi'] > 70:
             parts.append("RSI 과매수")
         else:
             parts.append("RSI 중립")
 
         if last['macd'] > last['signal']:
-            score += 1
-            parts.append("MACD 상승")
+            score += 1; parts.append("MACD 상승")
         else:
             parts.append("MACD 하락")
 
         if price_now > last['bollinger_mid']:
-            score += 1
-            parts.append("볼린저 상단")
+            score += 1; parts.append("볼린저 상단")
         else:
             parts.append("볼린저 하단")
 
         if last['ema_20'] > last['ema_50']:
-            score += 1
-            parts.append("EMA 20>50")
+            score += 1; parts.append("EMA 20>50")
         else:
             parts.append("EMA 20<50")
 
-        if df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]:
-            score += 1
-            parts.append("거래량 ↑")
+        if df['volume'].iloc[-1] > df['volume'].rolling(20).mean().iloc[-1]:
+            score += 1; parts.append("거래량 증가")
         else:
-            parts.append("거래량 ↓")
-
-        if label == '1m':
-            continue  # 1분봉은 내부 판단용, 표시 X
+            parts.append("거래량 정체")
 
         if score >= 4:
             status = f"🟢 강매 ({score}/5)"
@@ -132,20 +124,16 @@ def analyze_symbol(symbol):
         else:
             status = f"⚖️ 관망 ({score}/5)"
 
-        result = f"⏱️ {label} → {status}"
-        subinfo = f"({', '.join(parts)})"
-        results.append((result, subinfo))
+        results.append(f"⏱️ {label} → {status}  ({', '.join(parts)})")
 
     if not results:
-        return None
+        return f"⚠️ {symbol} 분석 불가: 데이터 부족 또는 지표 오류"
 
-    final_text = f"""
+    return f"""
 📊 <b>{symbol} 기술분석 리포트</b>
 🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-""" + "\n".join([f"{r} {s}" for r, s in results])
-
-    return final_text
+""" + "\n".join(results)
 
 def analysis_loop():
     while True:
@@ -154,8 +142,6 @@ def analysis_loop():
             msg = analyze_symbol(symbol)
             if msg:
                 send_telegram(msg)
-            else:
-                send_telegram(f"⚠️ {symbol} 분석 불가: 데이터 부족 또는 지표 오류")
             time.sleep(3)
         debug_log("⏳ 10분 대기 후 재분석")
         time.sleep(600)
