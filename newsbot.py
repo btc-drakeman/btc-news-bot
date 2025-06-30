@@ -8,7 +8,10 @@ import os
 
 # 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-USER_IDS_FILE = 'user_ids.txt'
+user_ids = {
+    '7505401062',  # 당신
+    '7576776181'   # 친구
+}
 
 # 분석할 코인 리스트
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
