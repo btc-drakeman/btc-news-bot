@@ -8,10 +8,13 @@ import html
 import os
 
 # 텔레그램 설정
-BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'  # 봇 토큰
-USER_ID = '7505401062'  # 사용자 ID
+BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
+USER_ID = '7505401062'
 
-# 텔레그램 메시지 전송 함수
+# 분석 대상 심볼
+SYMBOLS = ['BTCUSDT', 'SEIUSDT', 'VIRTUALUSDT', 'ETHUSDT', 'ETHFIUSDT', 'XRPUSDT']
+
+# 텔레그램 메시지 전송
 def send_telegram(text):
     url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
     data = {'chat_id': USER_ID, 'text': html.escape(text), 'parse_mode': 'HTML'}
@@ -23,14 +26,14 @@ def send_telegram(text):
         print(f"❌ 텔레그램 전송 오류: {e}")
         return None
 
-# MEXC에서 BTC 시세 가져와 RSI + MACD 분석
-def get_mexc_technical_summary():
+# RSI + MACD 기술 분석
+def analyze_symbol(symbol):
     try:
-        print("📥 MEXC에서 가격 데이터 요청 중...")
+        print(f"📥 {symbol} 데이터 요청 중...")
         url = "https://api.mexc.com/api/v3/klines"
         params = {
-            "symbol": "BTCUSDT",
-            "interval": "1m",  # 1분봉
+            "symbol": symbol,
+            "interval": "1m",
             "limit": 100
         }
         res = requests.get(url, params=params)
@@ -71,47 +74,50 @@ def get_mexc_technical_summary():
             advice = "⚖️ 중립 구간입니다"
 
         price_now = df['close'].iloc[-1]
-        print("📊 기술 분석 계산 완료")
+        print(f"📊 {symbol} 분석 완료")
+
         return (
-            f"📊 <b>BTC 기술 분석 (MEXC)</b>\n"
-            f"💰 현재가: ${price_now:,.2f}\n"
+            f"📊 <b>{symbol} 기술 분석 (MEXC)</b>\n"
+            f"💰 현재가: ${price_now:,.4f}\n"
             f"📈 RSI: {rsi_now:.1f} ({rsi_status})\n"
             f"📉 MACD: {macd_status}\n\n"
             f"{advice}"
         )
+
     except Exception as e:
-        print(f"❌ 기술 분석 오류: {e}")
+        print(f"❌ {symbol} 분석 오류: {e}")
         return None
 
-# 기술 분석 루프 (15분 간격)
+# 루프 실행: 모든 코인 분석
 def check_tech_loop():
-    print("📉 기술 분석 루프 시작")
+    print("📉 멀티코인 기술 분석 루프 시작")
     while True:
         try:
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            print(f"⏰ 분석 시각: {now}")
-            msg = get_mexc_technical_summary()
-            if msg:
-                print("✅ 메시지 생성 성공")
-                response = send_telegram(msg)
-                print(f"📨 응답: {response.status_code if response else '실패'}")
-            else:
-                print("⚠️ 메시지 없음 (msg=None)")
+            print(f"⏰ 분석 시작: {now}")
+            for symbol in SYMBOLS:
+                msg = analyze_symbol(symbol)
+                if msg:
+                    print(f"📨 {symbol} 메시지 전송 중...")
+                    response = send_telegram(msg)
+                    print(f"✅ {symbol} 전송 응답: {response.status_code if response else '실패'}")
+                else:
+                    print(f"⚠️ {symbol} 메시지 없음")
         except Exception as e:
-            print(f"❌ 루프 오류: {e}")
+            print(f"❌ 기술 분석 루프 오류: {e}")
         time.sleep(900)  # 15분
 
-# Flask 앱 설정
+# Flask 서버 설정
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ MEXC 기반 BTC RSI+MACD 분석 봇 작동 중!"
+    return "✅ 멀티코인 RSI+MACD 봇 작동 중!"
 
 @app.route('/test')
 def test():
     print("🧪 /test 요청 수신")
-    send_telegram("✅ [테스트] MEXC 기반 분석 봇 정상 작동 중입니다.")
+    send_telegram("✅ [테스트] 멀티코인 기술 분석 봇 정상 작동 중입니다.")
     return "✅ 테스트 메시지 전송됨"
 
 # 실행 시작
