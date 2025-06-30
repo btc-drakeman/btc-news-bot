@@ -73,6 +73,7 @@ def analyze_symbol(symbol):
 
     # RSI 정밀 해석
     rsi_score = last['rsi']
+    rsi_prev = prev['rsi']
     if rsi_score < 20:
         score += 1
         explain.append(f"✅ RSI: {rsi_score:.1f} (강한 과매도)")
@@ -85,6 +86,11 @@ def analyze_symbol(symbol):
         explain.append(f"⚠️ RSI: {rsi_score:.1f} (과매수)")
     else:
         explain.append(f"⚖️ RSI: {rsi_score:.1f}")
+
+    if rsi_score < 30 and rsi_score > rsi_prev:
+        explain.append("↗️ RSI: 반등 조짐")
+    elif rsi_score > 70 and rsi_score < rsi_prev:
+        explain.append("↘️ RSI: 고점 이후 꺾임")
 
     # MACD 정밀 해석
     if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
@@ -103,6 +109,14 @@ def analyze_symbol(symbol):
         explain.append("⚖️ MACD: 특별한 신호 없음")
 
     # Bollinger Band 정밀 해석
+    band_width = last['upper_band'] - last['lower_band']
+    prev_band_width = prev['upper_band'] - prev['lower_band']
+    band_change = band_width - prev_band_width
+    if band_change > prev_band_width * 0.1:
+        explain.append("⚡️ 볼린저: 밴드 확장 → 변동성 예고")
+    elif band_change < -prev_band_width * 0.1:
+        explain.append("💤 볼린저: 밴드 수축 → 횡보 가능성")
+
     if price_now < last['lower_band']:
         score += 1
         explain.append("✅ 볼린저: 하단 밴드 이탈 → 과매도")
@@ -113,6 +127,11 @@ def analyze_symbol(symbol):
         explain.append("✅ 볼린저: 중심선 상단 유지")
     else:
         explain.append("❌ 볼린저: 중심선 하단")
+
+    # RSI + 볼린저 중복 과매도 시그널
+    if rsi_score < 30 and price_now < last['lower_band']:
+        score += 1
+        explain.append("🔍 과매도 중복 시그널 → 반등 강도 ↑")
 
     # EMA
     if last['ema_20'] > last['ema_50']:
@@ -151,7 +170,9 @@ def analyze_symbol(symbol):
         stop_loss = price_now * 1.02
         take_profit = price_now * 0.96
     else:
-        entry_low = entry_high = stop_loss = take_profit = None
+        entry_low = price_now * 0.995
+        entry_high = price_now * 1.005
+        stop_loss = take_profit = None
 
     msg = f"""
 📊 <b>{symbol} 기술 분석 (MEXC)</b>
@@ -168,6 +189,9 @@ def analyze_symbol(symbol):
         msg += f"\n- 🎯 <b>진입 권장가</b>: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
         msg += f"\n- 🛑 <b>손절 제안</b>: ${stop_loss:,.2f}"
         msg += f"\n- 🟢 <b>익절 목표</b>: ${take_profit:,.2f}"
+    else:
+        msg += f"\n\n📌 <b>참고 가격 범위</b> (관망 중)"
+        msg += f"\n- 💡 진입 예상 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
 
     return msg
 
