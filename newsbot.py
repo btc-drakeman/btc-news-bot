@@ -33,7 +33,7 @@ def send_telegram(text):
 
 def fetch_ohlcv(symbol, interval):
     url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": 100}
+    params = {"symbol": symbol, "interval": interval, "limit": 200}
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
