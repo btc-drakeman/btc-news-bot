@@ -128,19 +128,16 @@ def analyze_symbol(symbol):
     else:
         explain.append("❌ 볼린저: 중심선 하단")
 
-    # RSI + 볼린저 중복 과매도 시그널
     if rsi_score < 30 and price_now < last['lower_band']:
         score += 1
         explain.append("🔍 과매도 중복 시그널 → 반등 강도 ↑")
 
-    # EMA
     if last['ema_20'] > last['ema_50']:
         score += 1
         explain.append("✅ EMA: 20/50 상단")
     else:
         explain.append("❌ EMA: 20/50 하단")
 
-    # 거래량
     vol_now = df['volume'].iloc[-1]
     vol_avg = df['volume'].rolling(window=20).mean().iloc[-1]
     if vol_now > vol_avg * 1.1:
@@ -189,6 +186,16 @@ def analyze_symbol(symbol):
         msg += f"\n- 🎯 <b>진입 권장가</b>: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
         msg += f"\n- 🛑 <b>손절 제안</b>: ${stop_loss:,.2f}"
         msg += f"\n- 🟢 <b>익절 목표</b>: ${take_profit:,.2f}"
+
+        # 예상 익절 시간 계산
+        try:
+            avg_delta = df['close'].pct_change().abs().rolling(5).mean().iloc[-1]
+            target_pct = abs(take_profit - price_now) / price_now
+            estimated_minutes = int(target_pct / avg_delta) if avg_delta > 0 else None
+            if estimated_minutes:
+                msg += f"\n⏱ <b>예상 익절 시간</b>: 약 {estimated_minutes}분 후 (최근 변동성 기준)"
+        except:
+            pass
     else:
         msg += f"\n\n📌 <b>참고 가격 범위</b> (관망 중)"
         msg += f"\n- 💡 진입 예상 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
