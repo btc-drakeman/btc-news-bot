@@ -4,30 +4,30 @@ import time
 from flask import Flask
 from threading import Thread
 from datetime import datetime
+import numpy as np
 
 # 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-USER_IDS = ['7505401062', '7576776181']
+USER_IDS = ['7505401062', '7576776181']  # ✅ 사용자 목록
 
 # 분석할 코인 리스트
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
-
-# 타임프레임 별 MEXC API 인터벌 매핑
-timeframes = {
-    '10분봉': '5m',
-    '1시간봉': '1h'
-}
+TIMEFRAMES = {'10m': '10m', '1h': '1h'}  # 분석 시간대
 
 app = Flask(__name__)
+
+def debug_log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 def send_telegram(text):
     for user_id in USER_IDS:
         url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
         data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
         try:
-            requests.post(url, data=data)
+            response = requests.post(url, data=data)
+            debug_log(f"메시지 전송 완료 → {user_id}")
         except Exception as e:
-            print(f"텔레그램 전송 오류 (chat_id={user_id}): {e}")
+            debug_log(f"❌ 텔레그램 전송 실패 (chat_id={user_id}): {e}")
 
 def fetch_ohlcv(symbol, interval):
     url = f"https://api.mexc.com/api/v3/klines"
@@ -39,129 +39,131 @@ def fetch_ohlcv(symbol, interval):
         closes = [float(x[4]) for x in data]
         volumes = [float(x[5]) for x in data]
         df = pd.DataFrame({"close": closes, "volume": volumes})
+        debug_log(f"{symbol} {interval} 데이터 수신 완료")
         return df, closes[-1]
     except Exception as e:
-        print(f"{symbol} ({interval}) 데이터 요청 실패: {e}")
+        debug_log(f"❌ {symbol} ({interval}) 데이터 요청 실패: {e}")
         return None, None
 
 def calculate_indicators(df):
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
+    try:
+        # RSI (Smoothed)
+        delta = df['close'].diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+        avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+        rs = avg_gain / avg_loss
+        df['rsi'] = 100 - (100 / (1 + rs))
 
-    avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['rsi'] = 100 - (100 / (1 + rs))
+        # MACD (정확한 수식)
+        ema_12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema_26 = df['close'].ewm(span=26, adjust=False).mean()
+        df['macd'] = ema_12 - ema_26
+        df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
 
-    ema_12 = df['close'].ewm(span=12, adjust=False).mean()
-    ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = ema_12 - ema_26
-    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        # EMA
+        df['ema_20'] = df['close'].ewm(span=20).mean()
+        df['ema_50'] = df['close'].ewm(span=50).mean()
 
-    df['ema_20'] = df['close'].ewm(span=20).mean()
-    df['ema_50'] = df['close'].ewm(span=50).mean()
+        # 볼린저 밴드
+        df['bollinger_mid'] = df['close'].rolling(window=20).mean()
+        df['bollinger_std'] = df['close'].rolling(window=20).std()
+        df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
+        df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
 
-    df['bollinger_mid'] = df['close'].rolling(window=20).mean()
-    df['bollinger_std'] = df['close'].rolling(window=20).std()
-    df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
-    df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
-    return df
-
-def analyze_single_tf(df, price_now):
-    last = df.iloc[-1]
-    score = 0
-
-    if last['rsi'] < 30:
-        score += 1
-    elif last['rsi'] > 70:
-        pass
-    else:
-        score += 0.5
-
-    if last['macd'] > last['signal']:
-        score += 1
-
-    if price_now > last['bollinger_mid']:
-        score += 1
-
-    if last['ema_20'] > last['ema_50']:
-        score += 1
-
-    if df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]:
-        score += 1
-
-    if score >= 4.5:
-        return "롱 (5/5)"
-    elif score >= 3:
-        return "롱 (4/5)"
-    elif score <= 1.5:
-        return "숏 (1~2/5)"
-    else:
-        return "관망"
+        return df
+    except Exception as e:
+        debug_log(f"❌ 지표 계산 오류: {e}")
+        return None
 
 def analyze_symbol(symbol):
-    summary = {}
-    price_now = None
-    for tf_name, interval in timeframes.items():
-        df, price = fetch_ohlcv(symbol, interval)
+    results = []
+    debug_log(f"▶️ {symbol} 다중 타임프레임 분석 시작")
+
+    for label, tf in TIMEFRAMES.items():
+        df, price_now = fetch_ohlcv(symbol, tf)
         if df is None:
-            return None
-        price_now = price
+            continue
+
         df = calculate_indicators(df)
-        summary[tf_name] = analyze_single_tf(df, price_now)
+        if df is None:
+            continue
 
-    long_count = list(summary.values()).count("롱 (5/5)") + list(summary.values()).count("롱 (4/5)")
-    short_count = list(summary.values()).count("숏 (1~2/5)")
-    
-    if long_count >= 2:
-        decision = "🔥 <i>강한 롱 시그널</i>"
-        direction = "롱"
-        entry_low = price_now * 0.995
-        entry_high = price_now * 1.005
-        stop_loss = price_now * 0.98
-        take_profit = price_now * 1.04
-    elif short_count >= 2:
-        decision = "⚠️ <i>숏 신호 주의</i>"
-        direction = "숏"
-        entry_low = price_now * 0.995
-        entry_high = price_now * 1.005
-        stop_loss = price_now * 1.02
-        take_profit = price_now * 0.96
-    else:
-        decision = "🤔 <i>관망 추천</i>"
-        direction = None
+        last = df.iloc[-1]
+        score = 0
+        parts = []
 
-    msg = f"""
-📊 <b>{symbol} 다중 분석</b>  
-(i) 분석 기준: RSI, MACD, EMA, 볼린저밴드, 거래량
+        if last['rsi'] < 30:
+            score += 1
+            parts.append("RSI 과매도")
+        elif last['rsi'] > 70:
+            parts.append("RSI 과매수")
+        else:
+            parts.append("RSI 중립")
+
+        if last['macd'] > last['signal']:
+            score += 1
+            parts.append("MACD 상승")
+        else:
+            parts.append("MACD 하락")
+
+        if price_now > last['bollinger_mid']:
+            score += 1
+            parts.append("볼린저 상단")
+        else:
+            parts.append("볼린저 하단")
+
+        if last['ema_20'] > last['ema_50']:
+            score += 1
+            parts.append("EMA 20>50")
+        else:
+            parts.append("EMA 20<50")
+
+        if df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]:
+            score += 1
+            parts.append("거래량 ↑")
+        else:
+            parts.append("거래량 ↓")
+
+        # 결정
+        if score >= 4:
+            status = f"🟢 강매 ({score}/5)"
+        elif score <= 2:
+            status = f"🔴 매도주의 ({score}/5)"
+        else:
+            status = f"⚖️ 관망 ({score}/5)"
+
+        result = f"⏱️ {label} → {status}"
+        subinfo = f"({', '.join(parts)})"
+        results.append((result, subinfo))
+
+    if not results:
+        return None
+
+    final_text = f"""
+📊 <b>{symbol} 다중 분석</b>
+<code>(RSI, MACD, 볼린저밴드, EMA, 거래량 기반)</code>
 🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-💰 현재가: <b>${price_now:,.2f}</b>
-"""
-    for tf_name, result in summary.items():
-        msg += f"\n🔹 <b>{tf_name}</b>: {result}"
 
-    msg += f"\n\n📈 <b>종합 판단</b>: {decision}"
+""" + "\n".join([f"{r} {s}" for r, s in results])
 
-    if direction:
-        msg += f"\n\n🎯 <b>진입가</b>: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
-        msg += f"\n🛑 <b>손절</b>: ${stop_loss:,.2f} | 🟢 <b>익절</b>: ${take_profit:,.2f}"
-
-    return msg
+    return final_text
 
 def analysis_loop():
     while True:
         for symbol in SYMBOLS:
-            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-            result = analyze_symbol(symbol)
-            if result:
-                send_telegram(result)
-            time.sleep(2)
+            debug_log(f"분석 중: {symbol}")
+            msg = analyze_symbol(symbol)
+            if msg:
+                send_telegram(msg)
+            time.sleep(3)
+        debug_log("⏳ 10분 대기 후 재분석")
         time.sleep(600)
 
 @app.route('/')
 def home():
-    return "✅ MEXC 다중 기술분석 봇 작동 중"
+    return "✅ MEXC 기술분석 봇 작동 중!"
 
 if __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
