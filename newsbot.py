@@ -6,43 +6,73 @@ from threading import Thread
 from datetime import datetime
 import os
 
-# 텔레그램 설정
+# 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-ADMIN_ID = '7505401062'  # 최초 관리자
-USER_ID_FILE = 'user_ids.txt'
+USER_IDS_FILE = 'user_ids.txt'
 
 # 분석할 코인 리스트
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
 
 app = Flask(__name__)
 
-# 사용자 목록 불러오기
+
 def load_user_ids():
-    if not os.path.exists(USER_ID_FILE):
-        return set([ADMIN_ID])
-    with open(USER_ID_FILE, 'r') as f:
-        return set(line.strip() for line in f if line.strip())
+    if not os.path.exists(USER_IDS_FILE):
+        return set()
+    with open(USER_IDS_FILE, 'r') as f:
+        return set(line.strip() for line in f if line.strip().isdigit())
 
-# 사용자 목록 저장
-def save_user_id(chat_id):
+
+def save_user_id(user_id):
     user_ids = load_user_ids()
-    if chat_id not in user_ids:
-        with open(USER_ID_FILE, 'a') as f:
-            f.write(str(chat_id) + '\n')
-        print(f"✅ 새로운 사용자 등록됨: {chat_id}")
+    if str(user_id) not in user_ids:
+        with open(USER_IDS_FILE, 'a') as f:
+            f.write(f"{user_id}\n")
+        print(f"✅ 새로운 사용자 등록됨: {user_id}")
 
-# 텔레그램 메시지 전송
+
 def send_telegram(text):
-    for uid in load_user_ids():
+    user_ids = load_user_ids()
+    for uid in user_ids:
         url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
         data = {'chat_id': uid, 'text': text, 'parse_mode': 'HTML'}
         try:
             response = requests.post(url, data=data)
-            print(f"📨 전송 대상 {uid} 응답 코드: {response.status_code}")
         except Exception as e:
-            print(f"❌ 텔레그램 전송 오류 ({uid}): {e}")
+            print(f"텔레그램 전송 오류 ({uid}): {e}")
 
-# OHLCV 가져오기 (MEXC)
+
+@app.route(f"/bot{BOT_TOKEN}", methods=['POST'])
+def telegram_webhook():
+    data = request.get_json()
+    if not data or 'message' not in data:
+        return '', 200
+
+    message = data['message']
+    chat_id = message['chat']['id']
+    text = message.get('text', '')
+
+    if text == "/start":
+        save_user_id(chat_id)
+        send_telegram("👋 알림에 성공적으로 등록되었습니다!")
+
+    elif text == "/stop":
+        current_ids = load_user_ids()
+        if str(chat_id) in current_ids:
+            current_ids.remove(str(chat_id))
+            with open(USER_IDS_FILE, 'w') as f:
+                for uid in current_ids:
+                    f.write(f"{uid}\n")
+            send_telegram("🔕 알림이 해제되었습니다.")
+
+    return '', 200
+
+
+@app.route('/')
+def home():
+    return "✅ MEXC 기술분석 봇 작동 중!"
+
+
 def fetch_ohlcv(symbol):
     url = f"https://api.mexc.com/api/v3/klines"
     params = {"symbol": symbol, "interval": "1m", "limit": 100}
@@ -58,7 +88,7 @@ def fetch_ohlcv(symbol):
         print(f"{symbol} 데이터 요청 실패: {e}")
         return None, None
 
-# 분석 함수
+
 def analyze_symbol(symbol):
     df, price_now = fetch_ohlcv(symbol)
     if df is None:
@@ -88,13 +118,14 @@ def analyze_symbol(symbol):
     score = 0
     explain = []
 
-    if last['rsi'] < 30:
+    rsi_score = last['rsi']
+    if rsi_score < 30:
         score += 1
-        explain.append("✅ RSI: {:.1f} (과매도)".format(last['rsi']))
-    elif last['rsi'] > 70:
-        explain.append("❌ RSI: {:.1f}".format(last['rsi']))
+        explain.append("✅ RSI: {:.1f} (과매도)".format(rsi_score))
+    elif rsi_score > 70:
+        explain.append("❌ RSI: {:.1f}".format(rsi_score))
     else:
-        explain.append("⚖️ RSI: {:.1f}".format(last['rsi']))
+        explain.append("⚖️ RSI: {:.1f}".format(rsi_score))
 
     if last['macd'] > last['signal']:
         score += 1
@@ -121,13 +152,13 @@ def analyze_symbol(symbol):
         explain.append("❌ 거래량: 증가 없음")
 
     if score >= 4:
-        decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
+        decision = "🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {}/5)".format(score)
         direction = "롱 (Long)"
     elif score <= 2:
-        decision = f"🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {score}/5)"
+        decision = "🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {}/5)".format(score)
         direction = "숏 (Short)"
     else:
-        decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
+        decision = "⚖️ ▶️ 종합 분석: 관망 구간 (점수: {}/5)".format(score)
         direction = "관망"
 
     if direction == "롱 (Long)":
@@ -161,38 +192,18 @@ def analyze_symbol(symbol):
 
     return msg
 
-# 분석 루프
+
 def analysis_loop():
     while True:
-        try:
-            for symbol in SYMBOLS:
-                print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-                result = analyze_symbol(symbol)
-                if result:
-                    send_telegram(result)
-                time.sleep(3)
-            time.sleep(600)
-        except Exception as e:
-            print(f"❌ 루프 오류: {e}")
+        for symbol in SYMBOLS:
+            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
+            result = analyze_symbol(symbol)
+            if result:
+                send_telegram(result)
+            time.sleep(3)
+        time.sleep(600)
 
-# 텔레그램 웹훅
-@app.route(f"/{BOT_TOKEN}", methods=['POST'])
-def telegram_webhook():
-    data = request.get_json()
-    if 'message' in data:
-        chat_id = str(data['message']['chat']['id'])
-        text = data['message'].get('text', '')
-        if text.strip() == "/start":
-            save_user_id(chat_id)
-            send_telegram("✅ 알림이 등록되었습니다!")
-    return '', 200
 
-# 상태 확인용
-@app.route('/')
-def home():
-    return "✅ MEXC 기술분석 통합 봇 작동 중!"
-
-# 실행
 if __name__ == '__main__':
     print("🟢 전체 통합 봇 실행 시작")
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
