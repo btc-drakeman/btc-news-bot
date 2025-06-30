@@ -7,7 +7,7 @@ from datetime import datetime
 
 # 텔레그램 봇 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
-USER_IDS = ['7505401062', '7576776181']  # ✅ 사용자 목록
+USER_IDS = ['7505401062', '7576776181']  # 사용자 목록
 
 # 분석할 코인 리스트
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT']
@@ -39,24 +39,29 @@ def fetch_ohlcv(symbol):
         print(f"{symbol} 데이터 요청 실패: {e}")
         return None, None
 
+def calculate_rsi(df, period=14):
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
 def analyze_symbol(symbol):
     df, price_now = fetch_ohlcv(symbol)
     if df is None:
         return None
 
-    delta = df['close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.rolling(window=14).mean()
-    avg_loss = loss.rolling(window=14).mean()
-    rs = avg_gain / avg_loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-
+    # 지표 계산
+    df['rsi'] = calculate_rsi(df)
     ema_12 = df['close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = ema_12 - ema_26
-    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df['macd'] = macd_line
+    df['signal'] = signal_line
     df['ema_20'] = df['close'].ewm(span=20).mean()
     df['ema_50'] = df['close'].ewm(span=50).mean()
     df['bollinger_mid'] = df['close'].rolling(window=20).mean()
@@ -65,50 +70,61 @@ def analyze_symbol(symbol):
     df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
 
     last = df.iloc[-1]
+    prev = df.iloc[-2]
     score = 0
     explain = []
 
+    # RSI
     rsi_score = last['rsi']
     if rsi_score < 30:
         score += 1
-        explain.append("✅ RSI: {:.1f} (과매도)".format(rsi_score))
+        explain.append(f"✅ RSI: {rsi_score:.1f} (과매도)")
     elif rsi_score > 70:
-        explain.append("❌ RSI: {:.1f}".format(rsi_score))
+        explain.append(f"❌ RSI: {rsi_score:.1f}")
     else:
-        explain.append("⚖️ RSI: {:.1f}".format(rsi_score))
+        explain.append(f"⚖️ RSI: {rsi_score:.1f}")
 
-    if last['macd'] > last['signal']:
+    # MACD
+    if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
         score += 1
-        explain.append("✅ MACD: 골든크로스")
+        explain.append("✅ MACD: 골든크로스 발생")
+    elif prev['macd'] > prev['signal'] and last['macd'] < last['signal']:
+        explain.append("❌ MACD: 데드크로스 발생")
     else:
-        explain.append("❌ MACD: 데드크로스")
+        explain.append("⚖️ MACD: 교차 없음")
 
+    # Bollinger Band
     if price_now > last['bollinger_mid']:
         score += 1
         explain.append("✅ 볼린저: 중심선 이상")
     else:
         explain.append("❌ 볼린저: 중심선 이하")
 
+    # EMA
     if last['ema_20'] > last['ema_50']:
         score += 1
         explain.append("✅ EMA: 20/50 상단")
     else:
         explain.append("❌ EMA: 20/50 하단")
 
-    if df['volume'].iloc[-1] > df['volume'].rolling(window=20).mean().iloc[-1]:
+    # 거래량
+    vol_now = df['volume'].iloc[-1]
+    vol_avg = df['volume'].rolling(window=20).mean().iloc[-1]
+    if vol_now > vol_avg * 1.1:
         score += 1
-        explain.append("✅ 거래량: 증가")
+        explain.append("✅ 거래량: 평균 대비 뚜렷한 증가")
     else:
-        explain.append("❌ 거래량: 증가 없음")
+        explain.append("❌ 거래량: 뚜렷한 증가 없음")
 
+    # 종합 판단
     if score >= 4:
-        decision = "🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {}/5)".format(score)
+        decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
         direction = "롱 (Long)"
     elif score <= 2:
-        decision = "🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {}/5)".format(score)
+        decision = f"🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {score}/5)"
         direction = "숏 (Short)"
     else:
-        decision = "⚖️ ▶️ 종합 분석: 관망 구간 (점수: {}/5)".format(score)
+        decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
         direction = "관망"
 
     if direction == "롱 (Long)":
@@ -134,7 +150,7 @@ def analyze_symbol(symbol):
     msg += f"\n\n{decision}"
 
     if direction != "관망":
-        msg += f"\n\n📌 <b>전략 제안</b>"
+        msg += f"\n\n📌 <b>전력 제안</b>"
         msg += f"\n- 🔁 <b>유리한 포지션</b>: {direction}"
         msg += f"\n- 🎯 <b>진입 권장가</b>: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
         msg += f"\n- 🛑 <b>손절 제안</b>: ${stop_loss:,.2f}"
@@ -154,7 +170,7 @@ def analysis_loop():
 
 @app.route('/')
 def home():
-    return "✅ MEXC 기술분석 봇 작동 중!"
+    return "✅ MEXC 기술분석 보스 작동 중!"
 
 if __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
