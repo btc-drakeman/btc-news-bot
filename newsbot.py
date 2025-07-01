@@ -1,3 +1,5 @@
+# newsbot.py
+
 import requests
 import pandas as pd
 import time
@@ -5,26 +7,32 @@ from flask import Flask
 from threading import Thread
 from datetime import datetime, timedelta
 import os
+import re
 
+# 기본 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'XRPUSDT']
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
+API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
 app = Flask(__name__)
 
-def send_telegram(text):
-    for user_id in USER_IDS:
-        url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
-        data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
+def send_telegram(text, chat_id=None):
+    targets = USER_IDS if chat_id is None else [chat_id]
+    for uid in targets:
         try:
-            response = requests.post(url, data=data)
-            print(f"메시지 전송됨 → {user_id}")
+            requests.post(f'{API_URL}/sendMessage', data={
+                'chat_id': uid,
+                'text': text,
+                'parse_mode': 'HTML'
+            })
+            print(f"메시지 전송됨 → {uid}")
         except Exception as e:
-            print(f"텔레그램 전송 오류 (chat_id={user_id}): {e}")
+            print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
 
 def fetch_ohlcv(symbol):
     url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": "1m", "limit": 300}
+    params = {"symbol": symbol.upper(), "interval": "1m", "limit": 300}
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
@@ -59,70 +67,57 @@ def calculate_weighted_score(last, prev, df, explain):
     total_weight = 0
 
     # RSI
-    rsi_score = 0
     if last['rsi'] < 30:
-        rsi_score = 1.0
+        score += 1.0
         explain.append(f"📉 RSI: 과매도권 ↗ 반등 가능성")
     elif last['rsi'] > 70:
         explain.append(f"📈 RSI: 과매수권 ↘ 하락 경고")
     else:
         explain.append(f"⚖️ RSI: 중립")
-    score += rsi_score
     total_weight += 1.0
 
     # MACD
-    macd_score = 0
     if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
-        macd_score = 1.5
+        score += 1.5
         explain.append(f"📊 MACD: 골든크로스 ↗ 상승 신호")
     elif prev['macd'] > prev['signal'] and last['macd'] < last['signal']:
         explain.append(f"📊 MACD: 데드크로스 ↘ 하락 신호")
     else:
         explain.append(f"📊 MACD: 특별한 신호 없음")
-    score += macd_score
     total_weight += 1.5
 
     # EMA
-    ema_score = 0
     if last['ema_20'] > last['ema_50']:
-        ema_score = 1.2
+        score += 1.2
         explain.append(f"📐 EMA: 단기 이평선이 장기 상단 ↗ 상승 흐름")
     else:
         explain.append(f"📐 EMA: 단기 이평선이 장기 하단 ↘ 하락 흐름")
-    score += ema_score
     total_weight += 1.2
 
-    # Bollinger
-    boll_score = 0
+    # Bollinger Band
     if last['close'] < last['lower_band']:
-        boll_score = 0.8
+        score += 0.8
         explain.append(f"📎 Bollinger: 하단 이탈 ↗ 기술적 반등 예상")
     elif last['close'] > last['upper_band']:
         explain.append(f"📎 Bollinger: 상단 돌파 ↘ 과열 우려")
     else:
         explain.append(f"📎 Bollinger: 밴드 내 중립")
-    score += boll_score
     total_weight += 0.8
 
     # Volume
-    vol_score = 0
     try:
-        vol_now = last['volume']
-        vol_avg = df['volume'].rolling(window=20).mean().iloc[-1]
-        if vol_now > vol_avg * 1.1:
-            vol_score = 0.5
+        if last['volume'] > df['volume'].rolling(20).mean().iloc[-1] * 1.1:
+            score += 0.5
             explain.append(f"📊 거래량: 평균 대비 증가 ↗ 수급 활발")
         else:
             explain.append(f"📊 거래량: 뚜렷한 변화 없음")
     except:
         explain.append(f"📊 거래량: 분석 불가")
-    score += vol_score
     total_weight += 0.5
 
-    normalized_score = round((score / total_weight) * 5, 2)
-    return normalized_score
+    return round((score / total_weight) * 5, 2)
 
-def analyze_symbol(symbol):
+def analyze_symbol(symbol, leverage=None):
     df, price_now = fetch_ohlcv(symbol)
     if df is None:
         return None
@@ -130,11 +125,8 @@ def analyze_symbol(symbol):
     df['rsi'] = calculate_rsi(df)
     ema_12 = df['close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    macd_line = ema_12 - ema_26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    df['macd'] = macd_line
-    df['signal'] = signal_line
-    df['hist'] = df['macd'] - df['signal']
+    df['macd'] = ema_12 - ema_26
+    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
     df['ema_20'] = df['close'].ewm(span=20).mean()
     df['ema_50'] = df['close'].ewm(span=50).mean()
     df['bollinger_mid'] = df['close'].rolling(window=20).mean()
@@ -148,11 +140,27 @@ def analyze_symbol(symbol):
 
     score = calculate_weighted_score(last, prev, df, explain)
 
+    direction = "관망"
     if score >= 3.5:
         direction = "롱 (Long)"
     elif score <= 2.0:
         direction = "숏 (Short)"
-    else:
-        direction = "관망"
 
-    entry_low, entry_high = calcu
+    entry_low, entry_high = calculate_entry_range(df, price_now)
+
+    # 레버리지 반영 손절/익절 비율 설정
+    if leverage:
+        lev = min(max(leverage, 1), 50)
+        stop_rate = round(1.5 / lev, 4)
+        take_rate = round(3.0 / lev, 4)
+    else:
+        stop_rate = 0.02
+        take_rate = 0.04
+
+    stop_loss = take_profit = None
+    if direction == "롱 (Long)":
+        stop_loss = price_now * (1 - stop_rate)
+        take_profit = price_now * (1 + take_rate)
+        action_msg = f"🟢 <b>추천 액션: 롱 포지션 진입</b>"
+    elif direction == "숏 (Short)":
+        stop_loss = price_now * (1*
