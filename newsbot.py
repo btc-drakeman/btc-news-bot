@@ -30,9 +30,9 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
 
-def fetch_ohlcv(symbol):
+def fetch_ohlcv(symbol, interval='1m'):
     url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol.upper(), "interval": "1m", "limit": 300}
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": 300}
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
@@ -40,10 +40,10 @@ def fetch_ohlcv(symbol):
         closes = [float(x[4]) for x in data]
         volumes = [float(x[5]) for x in data]
         df = pd.DataFrame({"close": closes, "volume": volumes})
-        return df, closes[-1]
+        return df
     except Exception as e:
-        print(f"{symbol} 데이터 요청 실패: {e}")
-        return None, None
+        print(f"{symbol} ({interval}) 데이터 요청 실패: {e}")
+        return None
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
@@ -55,17 +55,24 @@ def calculate_rsi(df, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def calculate_entry_range(df, price_now):
-    recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
-    if pd.isna(recent_volatility) or recent_volatility == 0:
-        return price_now * 0.995, price_now * 1.005
-    buffer = max(0.0025, min(recent_volatility * 3, 0.015))
-    return price_now * (1 - buffer), price_now * (1 + buffer)
+def calculate_indicators(df):
+    df['rsi'] = calculate_rsi(df)
+    ema_12 = df['close'].ewm(span=12).mean()
+    ema_26 = df['close'].ewm(span=26).mean()
+    df['macd'] = ema_12 - ema_26
+    df['signal'] = df['macd'].ewm(span=9).mean()
+    df['ema_20'] = df['close'].ewm(span=20).mean()
+    df['ema_50'] = df['close'].ewm(span=50).mean()
+    df['bollinger_mid'] = df['close'].rolling(window=20).mean()
+    df['bollinger_std'] = df['close'].rolling(window=20).std()
+    df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
+    df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
+    return df
 
 def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
-    
+
     if last['rsi'] < 30:
         score += 1.0
         explain.append("⚖️ RSI: 과매도권 ↗ 반등 가능성")
@@ -112,6 +119,38 @@ def calculate_weighted_score(last, prev, df, explain):
 
     return round((score / total_weight) * 5, 2)
 
+def analyze_multi_timeframe(symbol):
+    timeframes = [('1m', 0.5), ('5m', 1.0), ('15m', 1.5)]
+    total_score = 0
+    total_weight = 0
+    final_explain = []
+    price_now = None
+    for interval, weight in timeframes:
+        df = fetch_ohlcv(symbol, interval)
+        if df is None or len(df) < 30:
+            continue
+        df = calculate_indicators(df)
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        explain = []
+        score = calculate_weighted_score(last, prev, df, explain)
+        total_score += score * weight
+        total_weight += weight
+        if interval == '15m':
+            final_explain = explain
+            price_now = last['close']
+    if total_weight == 0 or price_now is None:
+        return None, None, None
+    final_score = round(total_score / total_weight, 2)
+    return final_score, final_explain, price_now
+
+def calculate_entry_range(df, price_now):
+    recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
+    if pd.isna(recent_volatility) or recent_volatility == 0:
+        return price_now * 0.995, price_now * 1.005
+    buffer = max(0.0025, min(recent_volatility * 3, 0.015))
+    return price_now * (1 - buffer), price_now * (1 + buffer)
+
 def get_safe_stop_rate(direction, leverage, default_stop_rate):
     if leverage is None:
         return default_stop_rate
@@ -153,26 +192,9 @@ def format_message(symbol, price_now, score, explain, direction, entry_low, entr
     return msg
 
 def analyze_symbol(symbol, leverage=None):
-    df, price_now = fetch_ohlcv(symbol)
-    if df is None:
+    score, explain, price_now = analyze_multi_timeframe(symbol)
+    if score is None:
         return None
-
-    df['rsi'] = calculate_rsi(df)
-    ema_12 = df['close'].ewm(span=12).mean()
-    ema_26 = df['close'].ewm(span=26).mean()
-    df['macd'] = ema_12 - ema_26
-    df['signal'] = df['macd'].ewm(span=9).mean()
-    df['ema_20'] = df['close'].ewm(span=20).mean()
-    df['ema_50'] = df['close'].ewm(span=50).mean()
-    df['bollinger_mid'] = df['close'].rolling(window=20).mean()
-    df['bollinger_std'] = df['close'].rolling(window=20).std()
-    df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
-    df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
-
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    explain = []
-    score = calculate_weighted_score(last, prev, df, explain)
 
     if score >= 3.5:
         direction = "롱 (Long)"
@@ -181,7 +203,12 @@ def analyze_symbol(symbol, leverage=None):
     else:
         direction = "관망"
 
+    df = fetch_ohlcv(symbol)  # 1분봉으로 entry range 계산용
+    if df is None:
+        return None
+    df = calculate_indicators(df)
     entry_low, entry_high = calculate_entry_range(df, price_now)
+
     if direction == "롱 (Long)":
         stop_rate = get_safe_stop_rate(direction, leverage, 0.02)
         stop_loss = price_now * (1 - stop_rate)
