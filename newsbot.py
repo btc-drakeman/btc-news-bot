@@ -1,17 +1,20 @@
 import requests
 import pandas as pd
 import time
-from flask import Flask
+from flask import Flask, request
 from threading import Thread
 from datetime import datetime, timedelta
-import os
 import re
 
+# 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
+# 감시할 심볼들
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
+
+# Flask 앱 생성
 app = Flask(__name__)
 
 def send_telegram(text, chat_id=None):
@@ -62,12 +65,12 @@ def calculate_entry_range(df, price_now):
 def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
-
+    
     if last['rsi'] < 30:
         score += 1.0
-        explain.append("📉 RSI: 과매도권 ↗ 반등 가능성")
+        explain.append("⚖️ RSI: 과매도권 ↗ 반등 가능성")
     elif last['rsi'] > 70:
-        explain.append("📈 RSI: 과매수권 ↘ 하락 경고")
+        explain.append("⚖️ RSI: 과매수권 ↘ 하락 경고")
     else:
         explain.append("⚖️ RSI: 중립")
     total_weight += 1.0
@@ -121,19 +124,44 @@ def get_safe_stop_rate(direction, leverage, default_stop_rate):
         return default_stop_rate
     return round(min(default_stop_rate, max_safe_rate * safe_margin), 4)
 
+def format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit):
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    action_line = {
+        "롱 (Long)": "🟢 추천 액션: 롱 포지션 진입",
+        "숏 (Short)": "🔴 추천 액션: 숏 포지션 진입",
+        "관망": "⚪ 추천 액션: 관망 (진입 자제)"
+    }[direction]
+
+    msg = f"""
+📊 {symbol.upper()} 기술 분석 (MEXC)
+🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
+💰 현재가: ${price_now:,.4f}
+
+{action_line}
+▶️ 종합 분석 점수: {score}/5
+
+""" + '\n'.join(explain)
+
+    if direction != "관망":
+        msg += f"""\n\n📌 진입 전략 제안
+🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
+🛑 손절가: ${stop_loss:,.2f}
+🟢 익절가: ${take_profit:,.2f}"
+    else:
+        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
+
+    return msg
+
 def analyze_symbol(symbol, leverage=None):
     df, price_now = fetch_ohlcv(symbol)
     if df is None:
         return None
 
     df['rsi'] = calculate_rsi(df)
-    ema_12 = df['close'].ewm(span=12, adjust=False).mean()
-    ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    macd_line = ema_12 - ema_26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    df['macd'] = macd_line
-    df['signal'] = signal_line
-    df['hist'] = df['macd'] - df['signal']
+    ema_12 = df['close'].ewm(span=12).mean()
+    ema_26 = df['close'].ewm(span=26).mean()
+    df['macd'] = ema_12 - ema_26
+    df['signal'] = df['macd'].ewm(span=9).mean()
     df['ema_20'] = df['close'].ewm(span=20).mean()
     df['ema_50'] = df['close'].ewm(span=50).mean()
     df['bollinger_mid'] = df['close'].rolling(window=20).mean()
@@ -144,56 +172,28 @@ def analyze_symbol(symbol, leverage=None):
     last = df.iloc[-1]
     prev = df.iloc[-2]
     explain = []
-
     score = calculate_weighted_score(last, prev, df, explain)
 
     if score >= 3.5:
-        decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
         direction = "롱 (Long)"
     elif score <= 2.0:
-        decision = f"🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {score}/5)"
         direction = "숏 (Short)"
     else:
-        decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
         direction = "관망"
 
     entry_low, entry_high = calculate_entry_range(df, price_now)
-
-    if leverage:
-        lev = min(max(leverage, 1), 50)
-        stop_rate_base = round(1.5 / lev, 4)
-        take_rate = round(3.0 / lev, 4)
-    else:
-        stop_rate_base = 0.02
-        take_rate = 0.04
-
-    stop_rate = get_safe_stop_rate(direction, leverage, stop_rate_base)
-
-    stop_loss = take_profit = None
     if direction == "롱 (Long)":
+        stop_rate = get_safe_stop_rate(direction, leverage, 0.02)
         stop_loss = price_now * (1 - stop_rate)
-        take_profit = price_now * (1 + take_rate)
+        take_profit = price_now * 1.04
     elif direction == "숏 (Short)":
+        stop_rate = get_safe_stop_rate(direction, leverage, 0.02)
         stop_loss = price_now * (1 + stop_rate)
-        take_profit = price_now * (1 - take_rate)
-
-    now_kst = datetime.utcnow() + timedelta(hours=9)
-    msg = f"""
-📊 <b>{symbol.upper()} 기술 분석 (MEXC)</b>
-🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
-💰 현재가: ${price_now:,.4f}
-
-""" + '\n'.join(explain) + f"\n\n{decision}"
-
-    if direction != "관망":
-        msg += f"""\n\n📌 <b>진입 전략 제안</b>
-🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
-🛑 손절가: ${stop_loss:,.2f}
-🟢 익절가: ${take_profit:,.2f}"""
+        take_profit = price_now * 0.96
     else:
-        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
+        stop_loss = take_profit = None
 
-    return msg
+    return format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit)
 
 def analysis_loop():
     while True:
