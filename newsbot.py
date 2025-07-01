@@ -1,5 +1,3 @@
-# newsbot.py
-
 import requests
 import pandas as pd
 import time
@@ -9,7 +7,6 @@ from datetime import datetime, timedelta
 import os
 import re
 
-# 기본 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
@@ -66,56 +63,63 @@ def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
 
-    # RSI
     if last['rsi'] < 30:
         score += 1.0
-        explain.append(f"📉 RSI: 과매도권 ↗ 반등 가능성")
+        explain.append("📉 RSI: 과매도권 ↗ 반등 가능성")
     elif last['rsi'] > 70:
-        explain.append(f"📈 RSI: 과매수권 ↘ 하락 경고")
+        explain.append("📈 RSI: 과매수권 ↘ 하락 경고")
     else:
-        explain.append(f"⚖️ RSI: 중립")
+        explain.append("⚖️ RSI: 중립")
     total_weight += 1.0
 
-    # MACD
     if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
         score += 1.5
-        explain.append(f"📊 MACD: 골든크로스 ↗ 상승 신호")
+        explain.append("📊 MACD: 골든크로스 ↗ 상승 신호")
     elif prev['macd'] > prev['signal'] and last['macd'] < last['signal']:
-        explain.append(f"📊 MACD: 데드크로스 ↘ 하락 신호")
+        explain.append("📊 MACD: 데드크로스 ↘ 하락 신호")
     else:
-        explain.append(f"📊 MACD: 특별한 신호 없음")
+        explain.append("📊 MACD: 특별한 신호 없음")
     total_weight += 1.5
 
-    # EMA
     if last['ema_20'] > last['ema_50']:
         score += 1.2
-        explain.append(f"📐 EMA: 단기 이평선이 장기 상단 ↗ 상승 흐름")
+        explain.append("📐 EMA: 단기 이평선이 장기 상단 ↗ 상승 흐름")
     else:
-        explain.append(f"📐 EMA: 단기 이평선이 장기 하단 ↘ 하락 흐름")
+        explain.append("📐 EMA: 단기 이평선이 장기 하단 ↘ 하락 흐름")
     total_weight += 1.2
 
-    # Bollinger Band
     if last['close'] < last['lower_band']:
         score += 0.8
-        explain.append(f"📎 Bollinger: 하단 이탈 ↗ 기술적 반등 예상")
+        explain.append("📎 Bollinger: 하단 이탈 ↗ 기술적 반등 예상")
     elif last['close'] > last['upper_band']:
-        explain.append(f"📎 Bollinger: 상단 돌파 ↘ 과열 우려")
+        explain.append("📎 Bollinger: 상단 돌파 ↘ 과열 우려")
     else:
-        explain.append(f"📎 Bollinger: 밴드 내 중립")
+        explain.append("📎 Bollinger: 밴드 내 중립")
     total_weight += 0.8
 
-    # Volume
     try:
         if last['volume'] > df['volume'].rolling(20).mean().iloc[-1] * 1.1:
             score += 0.5
-            explain.append(f"📊 거래량: 평균 대비 증가 ↗ 수급 활발")
+            explain.append("📊 거래량: 평균 대비 증가 ↗ 수급 활발")
         else:
-            explain.append(f"📊 거래량: 뚜렷한 변화 없음")
+            explain.append("📊 거래량: 뚜렷한 변화 없음")
     except:
-        explain.append(f"📊 거래량: 분석 불가")
+        explain.append("📊 거래량: 분석 불가")
     total_weight += 0.5
 
     return round((score / total_weight) * 5, 2)
+
+def get_safe_stop_rate(direction, leverage, default_stop_rate):
+    if leverage is None:
+        return default_stop_rate
+    safe_margin = 0.8
+    if direction == "롱 (Long)":
+        max_safe_rate = 1 - 1 / (1 + 1 / leverage)
+    elif direction == "숏 (Short)":
+        max_safe_rate = (1 / (1 - 1 / leverage)) - 1
+    else:
+        return default_stop_rate
+    return round(min(default_stop_rate, max_safe_rate * safe_margin), 4)
 
 def analyze_symbol(symbol, leverage=None):
     df, price_now = fetch_ohlcv(symbol)
@@ -125,8 +129,11 @@ def analyze_symbol(symbol, leverage=None):
     df['rsi'] = calculate_rsi(df)
     ema_12 = df['close'].ewm(span=12, adjust=False).mean()
     ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-    df['macd'] = ema_12 - ema_26
-    df['signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df['macd'] = macd_line
+    df['signal'] = signal_line
+    df['hist'] = df['macd'] - df['signal']
     df['ema_20'] = df['close'].ewm(span=20).mean()
     df['ema_50'] = df['close'].ewm(span=50).mean()
     df['bollinger_mid'] = df['close'].rolling(window=20).mean()
@@ -140,34 +147,35 @@ def analyze_symbol(symbol, leverage=None):
 
     score = calculate_weighted_score(last, prev, df, explain)
 
-    direction = "관망"
     if score >= 3.5:
+        decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
         direction = "롱 (Long)"
     elif score <= 2.0:
+        decision = f"🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {score}/5)"
         direction = "숏 (Short)"
+    else:
+        decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
+        direction = "관망"
 
     entry_low, entry_high = calculate_entry_range(df, price_now)
 
-    # 레버리지 반영 손절/익절 비율 설정
     if leverage:
         lev = min(max(leverage, 1), 50)
-        stop_rate = round(1.5 / lev, 4)
+        stop_rate_base = round(1.5 / lev, 4)
         take_rate = round(3.0 / lev, 4)
     else:
-        stop_rate = 0.02
+        stop_rate_base = 0.02
         take_rate = 0.04
+
+    stop_rate = get_safe_stop_rate(direction, leverage, stop_rate_base)
 
     stop_loss = take_profit = None
     if direction == "롱 (Long)":
         stop_loss = price_now * (1 - stop_rate)
         take_profit = price_now * (1 + take_rate)
-        action_msg = f"🟢 <b>추천 액션: 롱 포지션 진입</b>"
     elif direction == "숏 (Short)":
         stop_loss = price_now * (1 + stop_rate)
         take_profit = price_now * (1 - take_rate)
-        action_msg = f"🔴 <b>추천 액션: 숏 포지션 진입</b>"
-    else:
-        action_msg = f"⚖️ <b>추천 액션: 관망 유지</b>"
 
     now_kst = datetime.utcnow() + timedelta(hours=9)
     msg = f"""
@@ -175,19 +183,15 @@ def analyze_symbol(symbol, leverage=None):
 🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
 💰 현재가: ${price_now:,.4f}
 
-{action_msg}
-▶️ 종합 분석 점수: {score}/5
-
-""" + '\n'.join(explain)
+""" + '\n'.join(explain) + f"\n\n{decision}"
 
     if direction != "관망":
-        msg += f"""\n\n📌 <b>진입 전략 제안{" (레버리지: "+str(leverage)+"x)" if leverage else ""}</b>
+        msg += f"""\n\n📌 <b>진입 전략 제안</b>
 🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
 🛑 손절가: ${stop_loss:,.2f}
 🟢 익절가: ${take_profit:,.2f}"""
     else:
-        msg += f"""\n\n📌 <b>참고 가격 범위</b>
-🎯 ${entry_low:,.2f} ~ ${entry_high:,.2f}"""
+        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
 
     return msg
 
@@ -201,38 +205,28 @@ def analysis_loop():
             time.sleep(3)
         time.sleep(600)
 
-def handle_telegram_messages():
-    offset = None
-    while True:
-        try:
-            res = requests.get(f'{API_URL}/getUpdates', params={'timeout': 30, 'offset': offset})
-            res.raise_for_status()
-            updates = res.json()['result']
-            for update in updates:
-                offset = update['update_id'] + 1
-                msg = update.get('message', {})
-                chat_id = msg.get('chat', {}).get('id')
-                text = msg.get('text', '')
-
-                match = re.match(r'^/go\s+([a-zA-Z]+)\s+(\d{1,2})x$', text.strip())
-                if match:
-                    symbol = match.group(1).upper()
-                    leverage = int(match.group(2))
-                    print(f"/go 명령 감지 → 심볼: {symbol}, 레버리지: {leverage}x")
-                    result = analyze_symbol(symbol, leverage)
-                    if result:
-                        send_telegram(result, chat_id)
-        except Exception as e:
-            print(f"텔레그램 처리 오류: {e}")
-        time.sleep(2)
-
 @app.route('/')
 def home():
     return "✅ MEXC 기술분석 봇 작동 중!"
 
+@app.route(f"/bot{BOT_TOKEN}", methods=['POST'])
+def telegram_webhook():
+    data = request.get_json()
+    if 'message' in data:
+        chat_id = data['message']['chat']['id']
+        text = data['message'].get('text', '')
+        match = re.match(r"/go (\w+)(?:\s+(\d+)x)?", text.strip(), re.IGNORECASE)
+        if match:
+            symbol = match.group(1).upper()
+            leverage = int(match.group(2)) if match.group(2) else None
+            msg = analyze_symbol(symbol, leverage)
+            if msg:
+                send_telegram(msg, chat_id=chat_id)
+            else:
+                send_telegram(f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
+    return '', 200
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
     print("🟢 기술분석 봇 실행 시작")
-    Thread(target=lambda: app.run(host='0.0.0.0', port=port)).start()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop).start()
-    Thread(target=handle_telegram_messages).start()
