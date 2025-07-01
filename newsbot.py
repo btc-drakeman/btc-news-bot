@@ -17,9 +17,9 @@ def send_telegram(text):
         data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
         try:
             response = requests.post(url, data=data)
-            print(f"\uadf8\uba85\uc774 \uc804\uc1a1\ub418\uc5c8\uc2b5\ub2c8\ub2e4. → {user_id}")
+            print(f"메시지 전송됨 → {user_id}")
         except Exception as e:
-            print(f"\ud154\ub808\uadf8\ub7a8 \uc804\uc1a1 \uc624\ub958 (chat_id={user_id}): {e}")
+            print(f"텔레그램 전송 오류 (chat_id={user_id}): {e}")
 
 def fetch_ohlcv(symbol):
     url = f"https://api.mexc.com/api/v3/klines"
@@ -33,7 +33,7 @@ def fetch_ohlcv(symbol):
         df = pd.DataFrame({"close": closes, "volume": volumes})
         return df, closes[-1]
     except Exception as e:
-        print(f"{symbol} \ub370\uc774\ud130 \uc694\uccad \uc2e4\ud328: {e}")
+        print(f"{symbol} 데이터 요청 실패: {e}")
         return None, None
 
 def calculate_rsi(df, period=14):
@@ -46,11 +46,18 @@ def calculate_rsi(df, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
+def calculate_entry_range(df, price_now):
+    recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
+    if pd.isna(recent_volatility) or recent_volatility == 0:
+        return price_now * 0.995, price_now * 1.005
+
+    buffer = max(0.0025, min(recent_volatility * 3, 0.015))
+    return price_now * (1 - buffer), price_now * (1 + buffer)
+
 def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
 
-    # RSI (1.0)
     rsi_score = 0
     if last['rsi'] < 30:
         rsi_score = 1.0
@@ -62,7 +69,6 @@ def calculate_weighted_score(last, prev, df, explain):
     score += rsi_score
     total_weight += 1.0
 
-    # MACD (1.5)
     macd_score = 0
     if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
         macd_score = 1.5
@@ -74,7 +80,6 @@ def calculate_weighted_score(last, prev, df, explain):
     score += macd_score
     total_weight += 1.5
 
-    # EMA (1.2)
     ema_score = 0
     if last['ema_20'] > last['ema_50']:
         ema_score = 1.2
@@ -84,7 +89,6 @@ def calculate_weighted_score(last, prev, df, explain):
     score += ema_score
     total_weight += 1.2
 
-    # Bollinger Band (0.8)
     boll_score = 0
     if last['close'] < last['lower_band']:
         boll_score = 0.8
@@ -96,7 +100,6 @@ def calculate_weighted_score(last, prev, df, explain):
     score += boll_score
     total_weight += 0.8
 
-    # 거래량 (0.5)
     vol_score = 0
     try:
         vol_now = last['volume']
@@ -151,19 +154,15 @@ def analyze_symbol(symbol):
         decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
         direction = "관망"
 
+    entry_low, entry_high = calculate_entry_range(df, price_now)
+
     if direction == "롱 (Long)":
-        entry_low = price_now * 0.995
-        entry_high = price_now * 1.005
         stop_loss = price_now * 0.98
         take_profit = price_now * 1.04
     elif direction == "숏 (Short)":
-        entry_low = price_now * 0.995
-        entry_high = price_now * 1.005
         stop_loss = price_now * 1.02
         take_profit = price_now * 0.96
     else:
-        entry_low = price_now * 0.995
-        entry_high = price_now * 1.005
         stop_loss = take_profit = None
 
     now_kst = datetime.utcnow() + timedelta(hours=9)
