@@ -1,14 +1,14 @@
+# 전체 통합 코드 시작
 import requests
 import pandas as pd
 import time
-from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
+from datetime import datetime, timedelta
 
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
-TIMEFRAMES = {"1m": 1, "5m": 2, "15m": 3}
 
 app = Flask(__name__)
 
@@ -17,26 +17,24 @@ def send_telegram(text):
         url = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage'
         data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
         try:
-            requests.post(url, data=data)
-            print(f"[텔레그램] 메시지 전송 완료 → {user_id}")
+            response = requests.post(url, data=data)
+            print(f"메시지 전송됨 → {user_id}")
         except Exception as e:
-            print(f"[텔레그램 오류] {e}")
+            print(f"텔레그램 전송 오류 (chat_id={user_id}): {e}")
 
-def fetch_ohlcv_safe(symbol, interval, limit=150):
-    url = "https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
+def fetch_ohlcv(symbol):
+    url = f"https://api.mexc.com/api/v3/klines"
+    params = {"symbol": symbol, "interval": "1m", "limit": 300}
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
         closes = [float(x[4]) for x in data]
-        highs = [float(x[2]) for x in data]
-        lows = [float(x[3]) for x in data]
         volumes = [float(x[5]) for x in data]
-        df = pd.DataFrame({"close": closes, "high": highs, "low": lows, "volume": volumes})
+        df = pd.DataFrame({"close": closes, "volume": volumes})
         return df, closes[-1]
     except Exception as e:
-        print(f"[{symbol}-{interval}] 요청 실패: {e}")
+        print(f"{symbol} 데이터 요청 실패: {e}")
         return None, None
 
 def calculate_rsi(df, period=14):
@@ -49,153 +47,127 @@ def calculate_rsi(df, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def weighted_average(values, weights):
-    total_weight = sum(weights)
-    return sum(v * w for v, w in zip(values, weights)) / total_weight
+def calculate_weighted_score(last, prev, df):
+    score = 0
+    total_weight = 0
+    explain = []
 
-def summarize_direction(signals):
-    score = sum(signals)
-    if score >= 2:
-        return "상승 우세"
-    elif score <= -2:
-        return "하락 우세"
-    else:
-        return "중립"
+    # RSI (1.0)
+    rsi_score = 0
+    if last['rsi'] < 30:
+        rsi_score = 1.0
+    explain.append(f"RSI 점수: {rsi_score}")
+    score += rsi_score
+    total_weight += 1.0
+
+    # MACD (1.5)
+    macd_score = 0
+    if 'macd' in prev and 'signal' in prev and 'macd' in last and 'signal' in last:
+        if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
+            macd_score = 1.5
+    explain.append(f"MACD 점수: {macd_score}")
+    score += macd_score
+    total_weight += 1.5
+
+    # EMA (1.2)
+    ema_score = 0
+    if last['ema_20'] > last['ema_50']:
+        ema_score = 1.2
+    explain.append(f"EMA 점수: {ema_score}")
+    score += ema_score
+    total_weight += 1.2
+
+    # Bollinger Band (0.8)
+    boll_score = 0
+    if last['close'] < last['lower_band']:
+        boll_score = 0.8
+    explain.append(f"Bollinger 점수: {boll_score}")
+    score += boll_score
+    total_weight += 0.8
+
+    # 거래량 (0.5)
+    vol_score = 0
+    try:
+        vol_now = last['volume']
+        vol_avg = df['volume'].rolling(window=20).mean().iloc[-1]
+        if vol_now > vol_avg * 1.1:
+            vol_score = 0.5
+    except:
+        vol_score = 0
+    explain.append(f"거래량 점수: {vol_score}")
+    score += vol_score
+    total_weight += 0.5
+
+    normalized_score = round((score / total_weight) * 5, 2)
+    summary = f"총점: {score:.2f} / {total_weight:.2f} → 정규화 점수: {normalized_score}/5"
+    explain.append(summary)
+
+    return normalized_score, explain
 
 def analyze_symbol(symbol):
-    rsi_values = []
-    macd_signals, ema_signals, boll_signals, vol_signals = [], [], [], []
-    weights = []
-    price_now = None
-
-    for tf, weight in TIMEFRAMES.items():
-        df, price = fetch_ohlcv_safe(symbol, tf)
-        if df is None or len(df) < 30:
-            continue
-        if price_now is None:
-            price_now = price
-
-        df['rsi'] = calculate_rsi(df)
-
-        try:
-            ema_12 = df['close'].ewm(span=12, adjust=False).mean()
-            ema_26 = df['close'].ewm(span=26, adjust=False).mean()
-            macd_line = ema_12 - ema_26
-            signal_line = macd_line.ewm(span=9, adjust=False).mean()
-            hist = macd_line - signal_line
-
-            df['macd'] = macd_line
-            df['signal'] = signal_line
-            df['hist'] = hist
-        except:
-            continue
-
-        ema_20 = df['close'].ewm(span=20).mean()
-        ema_50 = df['close'].ewm(span=50).mean()
-
-        boll_mid = df['close'].rolling(window=20).mean()
-        boll_std = df['close'].rolling(window=20).std()
-        upper = boll_mid + 2 * boll_std
-        lower = boll_mid - 2 * boll_std
-
-        vol_now = df['volume'].iloc[-1]
-        vol_avg = df['volume'].rolling(window=20).mean().iloc[-1]
-
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
-
-        if not pd.isna(last['rsi']):
-            rsi_values.append(last['rsi'])
-            weights.append(weight)
-
-        # MACD 신호 판단
-        if 'hist' in df.columns and 'macd' in df.columns:
-            if df['hist'].iloc[-1] > df['hist'].iloc[-2]:
-                if df['macd'].iloc[-1] > 0:
-                    macd_signals.append(1)
-                else:
-                    macd_signals.append(0)
-            else:
-                if df['macd'].iloc[-1] < 0:
-                    macd_signals.append(-1)
-                else:
-                    macd_signals.append(0)
-
-        # EMA
-        ema_cross = 1 if ema_20.iloc[-1] > ema_50.iloc[-1] else -1
-        price_pos = 1 if price > ema_20.iloc[-1] else -1
-        ema_signals.append(1 if ema_cross + price_pos >= 1 else -1)
-
-        # Bollinger Band
-        band_width = upper.iloc[-1] - lower.iloc[-1]
-        prev_band_width = upper.iloc[-2] - lower.iloc[-2]
-        band_change = band_width - prev_band_width
-        if band_change < -0.05 * prev_band_width:
-            boll_signals.append(0)
-        elif price < lower.iloc[-1]:
-            boll_signals.append(-1)
-        elif price > upper.iloc[-1]:
-            boll_signals.append(1)
-        else:
-            boll_signals.append(0)
-
-        if vol_now > vol_avg * 1.2:
-            vol_signals.append(1)
-        elif vol_now < vol_avg * 0.8:
-            vol_signals.append(-1)
-        else:
-            vol_signals.append(0)
-
-    if price_now is None or not rsi_values:
+    df, price_now = fetch_ohlcv(symbol)
+    if df is None:
         return None
 
-    rsi_avg = weighted_average(rsi_values, weights)
-    now_kst = datetime.utcnow() + timedelta(hours=9)
-    now_str = now_kst.strftime('%Y-%m-%d %H:%M (KST)')
+    df['rsi'] = calculate_rsi(df)
+    ema_12 = df['close'].ewm(span=12, adjust=False).mean()
+    ema_26 = df['close'].ewm(span=26, adjust=False).mean()
+    macd_line = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df['macd'] = macd_line
+    df['signal'] = signal_line
+    df['hist'] = df['macd'] - df['signal']
+    df['ema_20'] = df['close'].ewm(span=20).mean()
+    df['ema_50'] = df['close'].ewm(span=50).mean()
+    df['bollinger_mid'] = df['close'].rolling(window=20).mean()
+    df['bollinger_std'] = df['close'].rolling(window=20).std()
+    df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
+    df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
 
-    msg = f"""
-📊 <b>{symbol} 기술 분석 (MEXC)</b>
-🕒 {now_str}
-💰 현재가: ${price_now:,.2f}
+    last = df.iloc[-1]
+    prev = df.iloc[-2]
 
-📌 <b>다중프레임 요약 (1분·5분·15분)</b>
-RSI 평균: {rsi_avg:.1f}
-MACD: {summarize_direction(macd_signals)}
-EMA: {summarize_direction(ema_signals)}
-Bollinger: {summarize_direction(boll_signals)}
-Volume: {summarize_direction(vol_signals)}
-"""
+    score, explain = calculate_weighted_score(last, prev, df)
 
-    score = macd_signals.count(1) + ema_signals.count(1) + boll_signals.count(-1)
-    if score >= 4:
-        decision = "🟢 매수 (Long)"
-        direction = "롱"
-    elif score <= 1:
-        decision = "🔴 매도 (Short)"
-        direction = "숏"
+    if score >= 3.5:
+        decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
+        direction = "롱 (Long)"
+    elif score <= 2.0:
+        decision = f"🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {score}/5)"
+        direction = "숏 (Short)"
     else:
-        decision = "⚖️ 관망"
+        decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
         direction = "관망"
 
-    msg += f"\n\n📌 <b>종합 판단</b>\n{decision}"
-
-    entry_low = price_now * 0.995
-    entry_high = price_now * 1.005
-
-    if direction == "롱":
+    if direction == "롱 (Long)":
+        entry_low = price_now * 0.995
+        entry_high = price_now * 1.005
         stop_loss = price_now * 0.98
         take_profit = price_now * 1.04
-    elif direction == "숏":
+    elif direction == "숏 (Short)":
+        entry_low = price_now * 0.995
+        entry_high = price_now * 1.005
         stop_loss = price_now * 1.02
         take_profit = price_now * 0.96
     else:
+        entry_low = price_now * 0.995
+        entry_high = price_now * 1.005
         stop_loss = take_profit = None
 
-    msg += f"\n\n📌 <b>진입 전략 제안</b>"
-    msg += f"\n🎯 진입 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
-    if stop_loss and take_profit:
-        msg += f"\n🛑 손절가: ${stop_loss:,.2f}"
-        msg += f"\n💰 익절가: ${take_profit:,.2f}"
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    msg = f"""
+📊 <b>{symbol} 기술 분석 (MEXC)</b>
+🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
+
+""" + '\n'.join(explain) + f"\n\n{decision}"
+
+    if direction != "관망":
+        msg += f"""\n\n📌 <b>진입 전략 제안</b>
+🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
+🛑 손절가: ${stop_loss:,.2f}
+🟢 익절가: ${take_profit:,.2f}"""
+    else:
+        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
 
     return msg
 
