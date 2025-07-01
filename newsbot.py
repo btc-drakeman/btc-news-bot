@@ -232,6 +232,46 @@ def analysis_loop():
             time.sleep(3)
         time.sleep(600)
 
+# 🔁 실시간 틱 단위 감지 쓰레드
+def live_monitor():
+    print("📡 실시간 가격 감시 시작")
+    THRESHOLDS = {
+        'BTCUSDT': 1.2,
+        'ETHUSDT': 1.5,
+        'ETHFIUSDT': 1.8,
+        'SEIUSDT': 2.5,
+    }
+    SYMBOL_INTERVAL = 10  # 10초 단위
+    PRICE_HISTORY = {sym: [] for sym in SYMBOLS}
+
+    while True:
+        for symbol in SYMBOLS:
+            try:
+                url = f"https://api.mexc.com/api/v3/klines"
+                params = {"symbol": symbol.upper(), "interval": "1m", "limit": 2}
+                res = requests.get(url, params=params, timeout=5)
+                res.raise_for_status()
+                data = res.json()
+                if len(data) < 2:
+                    continue
+                now_price = float(data[-1][4])
+                PRICE_HISTORY[symbol].append(now_price)
+
+                # 최근 1분간 변화율 측정
+                if len(PRICE_HISTORY[symbol]) >= 7:
+                    old_price = PRICE_HISTORY[symbol][-7]
+                    change = (now_price - old_price) / old_price * 100
+                    threshold = THRESHOLDS.get(symbol, 2.0)
+                    if abs(change) >= threshold:
+                        direction = "📈 급등" if change > 0 else "📉 급락"
+                        msg = f"🚨 <b>{symbol}</b> {direction} 감지!\n최근 1분간 {change:.2f}% {'상승' if change > 0 else '하락'}"
+                        send_telegram(msg)
+                    PRICE_HISTORY[symbol].pop(0)
+            except Exception as e:
+                print(f"[{symbol}] 실시간 감시 오류: {e}")
+        time.sleep(SYMBOL_INTERVAL)
+
+
 @app.route('/')
 def home():
     return "✅ MEXC 기술분석 봇 작동 중!"
@@ -257,3 +297,5 @@ if __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop).start()
+    Thread(target=live_monitor).start()
+
