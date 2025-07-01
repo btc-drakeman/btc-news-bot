@@ -4,10 +4,11 @@ import time
 from flask import Flask
 from threading import Thread
 from datetime import datetime, timedelta
+import os
 
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'XRPUSDT']
 
 app = Flask(__name__)
 
@@ -50,7 +51,6 @@ def calculate_entry_range(df, price_now):
     recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
     if pd.isna(recent_volatility) or recent_volatility == 0:
         return price_now * 0.995, price_now * 1.005
-
     buffer = max(0.0025, min(recent_volatility * 3, 0.015))
     return price_now * (1 - buffer), price_now * (1 + buffer)
 
@@ -58,6 +58,7 @@ def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
 
+    # RSI
     rsi_score = 0
     if last['rsi'] < 30:
         rsi_score = 1.0
@@ -69,6 +70,7 @@ def calculate_weighted_score(last, prev, df, explain):
     score += rsi_score
     total_weight += 1.0
 
+    # MACD
     macd_score = 0
     if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
         macd_score = 1.5
@@ -80,6 +82,7 @@ def calculate_weighted_score(last, prev, df, explain):
     score += macd_score
     total_weight += 1.5
 
+    # EMA
     ema_score = 0
     if last['ema_20'] > last['ema_50']:
         ema_score = 1.2
@@ -89,6 +92,7 @@ def calculate_weighted_score(last, prev, df, explain):
     score += ema_score
     total_weight += 1.2
 
+    # Bollinger
     boll_score = 0
     if last['close'] < last['lower_band']:
         boll_score = 0.8
@@ -100,6 +104,7 @@ def calculate_weighted_score(last, prev, df, explain):
     score += boll_score
     total_weight += 0.8
 
+    # Volume
     vol_score = 0
     try:
         vol_now = last['volume']
@@ -115,7 +120,6 @@ def calculate_weighted_score(last, prev, df, explain):
     total_weight += 0.5
 
     normalized_score = round((score / total_weight) * 5, 2)
-    explain.append(f"📌 총점 기반 판단 점수: {normalized_score}/5")
     return normalized_score
 
 def analyze_symbol(symbol):
@@ -145,59 +149,10 @@ def analyze_symbol(symbol):
     score = calculate_weighted_score(last, prev, df, explain)
 
     if score >= 3.5:
-        decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
         direction = "롱 (Long)"
     elif score <= 2.0:
-        decision = f"🔴 ▶️ 종합 분석: 매도 주의 신호 (점수: {score}/5)"
         direction = "숏 (Short)"
     else:
-        decision = f"⚖️ ▶️ 종합 분석: 관망 구간 (점수: {score}/5)"
         direction = "관망"
 
-    entry_low, entry_high = calculate_entry_range(df, price_now)
-
-    if direction == "롱 (Long)":
-        stop_loss = price_now * 0.98
-        take_profit = price_now * 1.04
-    elif direction == "숏 (Short)":
-        stop_loss = price_now * 1.02
-        take_profit = price_now * 0.96
-    else:
-        stop_loss = take_profit = None
-
-    now_kst = datetime.utcnow() + timedelta(hours=9)
-    msg = f"""
-📊 <b>{symbol} 기술 분석 (MEXC)</b>
-🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
-💰 현재가: ${price_now:,.4f}
-
-""" + '\n'.join(explain) + f"\n\n{decision}"
-
-    if direction != "관망":
-        msg += f"""\n\n📌 <b>진입 전략 제안</b>
-🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
-🛑 손절가: ${stop_loss:,.2f}
-🟢 익절가: ${take_profit:,.2f}"""
-    else:
-        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
-
-    return msg
-
-def analysis_loop():
-    while True:
-        for symbol in SYMBOLS:
-            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-            result = analyze_symbol(symbol)
-            if result:
-                send_telegram(result)
-            time.sleep(3)
-        time.sleep(600)
-
-@app.route('/')
-def home():
-    return "✅ MEXC 기술분석 봇 작동 중!"
-
-if __name__ == '__main__':
-    print("🟢 기술분석 봇 실행 시작")
-    Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
-    Thread(target=analysis_loop).start()
+    entry_low, entry_high = calcu
