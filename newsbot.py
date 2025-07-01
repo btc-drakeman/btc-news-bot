@@ -144,11 +144,11 @@ def format_message(symbol, price_now, score, explain, direction, entry_low, entr
 
     if direction != "관망":
         msg += f"""\n\n📌 진입 전략 제안
-🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
-🛑 손절가: ${stop_loss:,.2f}
-🟢 익절가: ${take_profit:,.2f}"""
+🎯 진입 권장가: ${entry_low:,.4f} ~ ${entry_high:,.4f}
+🛑 손절가: ${stop_loss:,.4f}
+🟢 익절가: ${take_profit:,.4f}"""
     else:
-        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.2f} ~ ${entry_high:,.2f}"
+        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.4f} ~ ${entry_high:,.4f}"
 
     return msg
 
