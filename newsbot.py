@@ -1,4 +1,3 @@
-# 전체 통합 코드 시작
 import requests
 import pandas as pd
 import time
@@ -18,9 +17,9 @@ def send_telegram(text):
         data = {'chat_id': user_id, 'text': text, 'parse_mode': 'HTML'}
         try:
             response = requests.post(url, data=data)
-            print(f"메시지 전송됨 → {user_id}")
+            print(f"\uadf8\uba85\uc774 \uc804\uc1a1\ub418\uc5c8\uc2b5\ub2c8\ub2e4. → {user_id}")
         except Exception as e:
-            print(f"텔레그램 전송 오류 (chat_id={user_id}): {e}")
+            print(f"\ud154\ub808\uadf8\ub7a8 \uc804\uc1a1 \uc624\ub958 (chat_id={user_id}): {e}")
 
 def fetch_ohlcv(symbol):
     url = f"https://api.mexc.com/api/v3/klines"
@@ -34,7 +33,7 @@ def fetch_ohlcv(symbol):
         df = pd.DataFrame({"close": closes, "volume": volumes})
         return df, closes[-1]
     except Exception as e:
-        print(f"{symbol} 데이터 요청 실패: {e}")
+        print(f"{symbol} \ub370\uc774\ud130 \uc694\uccad \uc2e4\ud328: {e}")
         return None, None
 
 def calculate_rsi(df, period=14):
@@ -47,25 +46,31 @@ def calculate_rsi(df, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def calculate_weighted_score(last, prev, df):
+def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
-    explain = []
 
     # RSI (1.0)
     rsi_score = 0
     if last['rsi'] < 30:
         rsi_score = 1.0
-    explain.append(f"RSI 점수: {rsi_score}")
+        explain.append(f"📉 RSI: 과매도권 ↗ 반등 가능성")
+    elif last['rsi'] > 70:
+        explain.append(f"📈 RSI: 과매수권 ↘ 하락 경고")
+    else:
+        explain.append(f"⚖️ RSI: 중립")
     score += rsi_score
     total_weight += 1.0
 
     # MACD (1.5)
     macd_score = 0
-    if 'macd' in prev and 'signal' in prev and 'macd' in last and 'signal' in last:
-        if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
-            macd_score = 1.5
-    explain.append(f"MACD 점수: {macd_score}")
+    if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
+        macd_score = 1.5
+        explain.append(f"📊 MACD: 골든크로스 ↗ 상승 신호")
+    elif prev['macd'] > prev['signal'] and last['macd'] < last['signal']:
+        explain.append(f"📊 MACD: 데드크로스 ↘ 하락 신호")
+    else:
+        explain.append(f"📊 MACD: 특별한 신호 없음")
     score += macd_score
     total_weight += 1.5
 
@@ -73,7 +78,9 @@ def calculate_weighted_score(last, prev, df):
     ema_score = 0
     if last['ema_20'] > last['ema_50']:
         ema_score = 1.2
-    explain.append(f"EMA 점수: {ema_score}")
+        explain.append(f"📐 EMA: 단기 이평선이 장기 상단 ↗ 상승 흐름")
+    else:
+        explain.append(f"📐 EMA: 단기 이평선이 장기 하단 ↘ 하락 흐름")
     score += ema_score
     total_weight += 1.2
 
@@ -81,7 +88,11 @@ def calculate_weighted_score(last, prev, df):
     boll_score = 0
     if last['close'] < last['lower_band']:
         boll_score = 0.8
-    explain.append(f"Bollinger 점수: {boll_score}")
+        explain.append(f"📎 Bollinger: 하단 이탈 ↗ 기술적 반등 예상")
+    elif last['close'] > last['upper_band']:
+        explain.append(f"📎 Bollinger: 상단 돌파 ↘ 과열 우려")
+    else:
+        explain.append(f"📎 Bollinger: 밴드 내 중립")
     score += boll_score
     total_weight += 0.8
 
@@ -92,17 +103,17 @@ def calculate_weighted_score(last, prev, df):
         vol_avg = df['volume'].rolling(window=20).mean().iloc[-1]
         if vol_now > vol_avg * 1.1:
             vol_score = 0.5
+            explain.append(f"📊 거래량: 평균 대비 증가 ↗ 수급 활발")
+        else:
+            explain.append(f"📊 거래량: 뚜렷한 변화 없음")
     except:
-        vol_score = 0
-    explain.append(f"거래량 점수: {vol_score}")
+        explain.append(f"📊 거래량: 분석 불가")
     score += vol_score
     total_weight += 0.5
 
     normalized_score = round((score / total_weight) * 5, 2)
-    summary = f"총점: {score:.2f} / {total_weight:.2f} → 정규화 점수: {normalized_score}/5"
-    explain.append(summary)
-
-    return normalized_score, explain
+    explain.append(f"📌 총점 기반 판단 점수: {normalized_score}/5")
+    return normalized_score
 
 def analyze_symbol(symbol):
     df, price_now = fetch_ohlcv(symbol)
@@ -126,8 +137,9 @@ def analyze_symbol(symbol):
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
+    explain = []
 
-    score, explain = calculate_weighted_score(last, prev, df)
+    score = calculate_weighted_score(last, prev, df, explain)
 
     if score >= 3.5:
         decision = f"🟢 ▶️ 종합 분석: 강한 매수 신호 (점수: {score}/5)"
@@ -158,6 +170,7 @@ def analyze_symbol(symbol):
     msg = f"""
 📊 <b>{symbol} 기술 분석 (MEXC)</b>
 🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
+💰 현재가: ${price_now:,.4f}
 
 """ + '\n'.join(explain) + f"\n\n{decision}"
 
