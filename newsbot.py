@@ -163,4 +163,76 @@ def analyze_symbol(symbol, leverage=None):
         take_profit = price_now * (1 + take_rate)
         action_msg = f"🟢 <b>추천 액션: 롱 포지션 진입</b>"
     elif direction == "숏 (Short)":
-        stop_loss = price_now * (1*
+        stop_loss = price_now * (1 + stop_rate)
+        take_profit = price_now * (1 - take_rate)
+        action_msg = f"🔴 <b>추천 액션: 숏 포지션 진입</b>"
+    else:
+        action_msg = f"⚖️ <b>추천 액션: 관망 유지</b>"
+
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    msg = f"""
+📊 <b>{symbol.upper()} 기술 분석 (MEXC)</b>
+🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
+💰 현재가: ${price_now:,.4f}
+
+{action_msg}
+▶️ 종합 분석 점수: {score}/5
+
+""" + '\n'.join(explain)
+
+    if direction != "관망":
+        msg += f"""\n\n📌 <b>진입 전략 제안{" (레버리지: "+str(leverage)+"x)" if leverage else ""}</b>
+🎯 진입 권장가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
+🛑 손절가: ${stop_loss:,.2f}
+🟢 익절가: ${take_profit:,.2f}"""
+    else:
+        msg += f"""\n\n📌 <b>참고 가격 범위</b>
+🎯 ${entry_low:,.2f} ~ ${entry_high:,.2f}"""
+
+    return msg
+
+def analysis_loop():
+    while True:
+        for symbol in SYMBOLS:
+            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
+            result = analyze_symbol(symbol)
+            if result:
+                send_telegram(result)
+            time.sleep(3)
+        time.sleep(600)
+
+def handle_telegram_messages():
+    offset = None
+    while True:
+        try:
+            res = requests.get(f'{API_URL}/getUpdates', params={'timeout': 30, 'offset': offset})
+            res.raise_for_status()
+            updates = res.json()['result']
+            for update in updates:
+                offset = update['update_id'] + 1
+                msg = update.get('message', {})
+                chat_id = msg.get('chat', {}).get('id')
+                text = msg.get('text', '')
+
+                match = re.match(r'^/go\s+([a-zA-Z]+)\s+(\d{1,2})x$', text.strip())
+                if match:
+                    symbol = match.group(1).upper()
+                    leverage = int(match.group(2))
+                    print(f"/go 명령 감지 → 심볼: {symbol}, 레버리지: {leverage}x")
+                    result = analyze_symbol(symbol, leverage)
+                    if result:
+                        send_telegram(result, chat_id)
+        except Exception as e:
+            print(f"텔레그램 처리 오류: {e}")
+        time.sleep(2)
+
+@app.route('/')
+def home():
+    return "✅ MEXC 기술분석 봇 작동 중!"
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    print("🟢 기술분석 봇 실행 시작")
+    Thread(target=lambda: app.run(host='0.0.0.0', port=port)).start()
+    Thread(target=analysis_loop).start()
+    Thread(target=handle_telegram_messages).start()
