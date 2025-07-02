@@ -48,10 +48,21 @@ def fetch_investing_schedule():
         response.raise_for_status()
 
         data = response.json()
+        print(f"📦 응답 타입: {type(data)}")
+        print(f"📦 데이터 샘플: {str(data)[:500]}")
+
         result = []
 
-        for ev in data.get('data', []):
+        if not isinstance(data, dict) or 'data' not in data:
+            print("⚠️ JSON 구조가 예상과 다릅니다.")
+            return []
+
+        for ev in data['data']:
             try:
+                if isinstance(ev, str):
+                    print(f"⚠️ 문자열 이벤트 발견 → {ev[:100]}")
+                    continue
+
                 dt = datetime.utcfromtimestamp(int(ev['timestamp']))
                 title = ev.get('event', 'No Title')
                 country = ev.get('country', 'N/A')
