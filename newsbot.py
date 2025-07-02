@@ -1,21 +1,21 @@
 
-import requests
+iimport requests
 import pandas as pd
 import time
 from flask import Flask, request
 from threading import Thread
 from datetime import datetime, timedelta
 import re
+from config import BOT_TOKEN, USER_IDS, API_URL
+from economic_alert import start_economic_schedule
 
 # 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
-# 감시할 심볼들
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SEIUSDT']
 
-# Flask 앱 생성
 app = Flask(__name__)
 
 def send_telegram(text, chat_id=None):
@@ -258,3 +258,4 @@ if __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop).start()
+    Thread(target=start_economic_schedule).start()
