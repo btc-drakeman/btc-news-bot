@@ -26,35 +26,43 @@ def fetch_investing_schedule():
     headers = {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://www.investing.com/economic-calendar/',
-        'x-requested-with': 'XMLHttpRequest',
+        'X-Requested-With': 'XMLHttpRequest',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
+
     now = datetime.utcnow()
     payload = {
+        'country[]': [],  # 전체 국가
+        'importance[]': ['1', '2', '3'],
+        'category[]': [],
+        'timeZone': '55',  # Asia/Seoul (KST)
+        'lang': 'en',
         'dateFrom': now.strftime('%Y-%m-%d'),
         'dateTo': (now + timedelta(days=30)).strftime('%Y-%m-%d'),
-        'timeZone': '55',  # KST
-        'importance[]': ['1', '2', '3'],
+        'limit_from': '0'
     }
 
     try:
+        print("📡 Investing 일정 요청 중 (XHR)...")
         response = requests.post(url, headers=headers, data=payload, timeout=10)
         response.raise_for_status()
+
         data = response.json()
         result = []
 
         for ev in data.get('data', []):
             try:
-                timestamp = int(ev['timestamp'])
-                dt = datetime.utcfromtimestamp(timestamp)
+                dt = datetime.utcfromtimestamp(int(ev['timestamp']))
+                title = ev.get('event', 'No Title')
                 country = ev.get('country', 'N/A')
                 impact = ev.get('impact', 'N/A')
-                title = ev.get('event', 'No Title')
+
                 result.append({
                     'datetime': dt,
                     'title': f"[{country}/{impact}] {title}"
                 })
             except Exception as e:
+                print(f"❌ 일정 항목 처리 중 오류: {e}")
                 continue
 
         print(f"✅ Investing 일정 {len(result)}건 가져옴 (XHR 방식)")
