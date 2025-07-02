@@ -42,7 +42,7 @@ def fetch_investing_schedule():
                 timestamp = row.get("data-event-datetime")
                 if not timestamp:
                     continue
-                dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S")
+                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
 
                 if dt.month != now.month:
                     continue
