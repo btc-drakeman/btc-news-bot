@@ -87,6 +87,7 @@ def start_economic_schedule():
 
     refresh_schedule()
     scheduler = BackgroundScheduler()
+    scheduler.configure(timezone="UTC") 
     scheduler.add_job(refresh_schedule, 'interval', hours=3)
     scheduler.add_job(check_upcoming, 'interval', minutes=1)
     scheduler.start()
