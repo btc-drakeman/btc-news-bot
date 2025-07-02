@@ -1,4 +1,5 @@
 import requests
+from bs4 import BeautifulSoup  # ✅ 누락된 부분
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -69,6 +70,20 @@ def fetch_investing_schedule():
         print(f"❌ Investing BeautifulSoup 크롤링 실패: {e}")
         return []
 
+def test_investing_connection():
+    try:
+        url = "https://www.investing.com/economic-calendar/"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers)
+        print(f"🔍 Status Code: {res.status_code}")
+        print(f"🔍 Content Length: {len(res.text)}")
+        if res.status_code == 200:
+            print("✅ 연결 성공 (Render에서 investing.com 접속 가능)")
+        else:
+            print("❌ 비정상 응답 코드")
+    except Exception as e:
+        print(f"❌ 연결 실패: {e}")
+
 
 def notify_schedule(event):
     local_dt = event['datetime'] + timedelta(hours=9)  # KST
@@ -85,6 +100,8 @@ def get_this_month_schedule():
         e for e in all_schedules
         if now <= e['datetime'] <= end
     ]
+
+test_investing_connection()
 
 def start_economic_schedule():
     global all_schedules
