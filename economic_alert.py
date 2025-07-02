@@ -61,7 +61,7 @@ def fetch_investing_schedule():
         soup = BeautifulSoup(response.text, "html.parser")
 
         rows = soup.select("tr.js-event-item")
-        now = datetime.utcnow() + timedelta(hours=9)  # Convert 기준 UTC → KST
+        now = datetime.utcnow()
         result = []
 
         for row in rows:
@@ -70,10 +70,13 @@ def fetch_investing_schedule():
                 if not timestamp:
                     continue
 
-                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+                # ✅ 시간 형식 자동 감지
+                try:
+                    dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+                except ValueError:
+                    dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S")
 
-                # ✅ 2~3일 이내 일정만 필터
-                if not (now <= dt <= now + timedelta(days=3)):
+                if dt.month != now.month:
                     continue
 
                 title_el = row.select_one(".event")
