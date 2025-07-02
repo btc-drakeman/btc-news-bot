@@ -1,5 +1,4 @@
 import requests
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -21,65 +20,48 @@ def send_telegram(text):
         except Exception as e:
             print(f"❌ 알림 전송 실패: {e}")
 
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-
-# Investing.com 크롤링 함수 복붙
+# Investing.com XHR 기반 일정 가져오기 (정적 HTML 아닌 JSON 기반)
 def fetch_investing_schedule():
-    import requests
-    from bs4 import BeautifulSoup
-    from datetime import datetime, timedelta
-
-    url = "https://www.investing.com/economic-calendar/"
+    url = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData"
     headers = {
         'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://www.investing.com/',
+        'Referer': 'https://www.investing.com/economic-calendar/',
+        'x-requested-with': 'XMLHttpRequest',
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
-    
+    now = datetime.utcnow()
+    payload = {
+        'dateFrom': now.strftime('%Y-%m-%d'),
+        'dateTo': (now + timedelta(days=30)).strftime('%Y-%m-%d'),
+        'timeZone': '55',  # KST
+        'importance[]': ['1', '2', '3'],
+    }
+
     try:
-        response = requests.get(url, headers=headers)
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        table = soup.find("table", {"id": "economicCalendarData"})
-        if not table:
-            print("❌ 테이블을 찾을 수 없음 (Investing.com 구조 변경 또는 차단 가능성)")
-            return []
-
-        rows = table.find_all("tr", {"event_timestamp": True})
-
+        response = requests.post(url, headers=headers, data=payload, timeout=10)
+        response.raise_for_status()
+        data = response.json()
         result = []
-        now = datetime.utcnow() + timedelta(hours=9)  # 한국시간
 
-        for row in rows:
+        for ev in data.get('data', []):
             try:
-                timestamp = int(row["event_timestamp"])
-                dt = datetime.utcfromtimestamp(timestamp) + timedelta(hours=9)
-                
-                if dt.month != now.month:
-                    continue  # 이번 달 일정만 추출
-
-                country_el = row.find("td", class_="flagCur")
-                country = country_el.text.strip() if country_el else "N/A"
-
-                impact_el = row.find("td", class_="sentiment")
-                impact = f"{len(impact_el.find_all('i'))} Level" if impact_el else "N/A"
-
-                title_el = row.find("td", class_="event")
-                title = title_el.text.strip() if title_el else "No Title"
-
+                timestamp = int(ev['timestamp'])
+                dt = datetime.utcfromtimestamp(timestamp)
+                country = ev.get('country', 'N/A')
+                impact = ev.get('impact', 'N/A')
+                title = ev.get('event', 'No Title')
                 result.append({
-                    "datetime": dt,
-                    "title": f"[{country}/{impact}] {title}"
+                    'datetime': dt,
+                    'title': f"[{country}/{impact}] {title}"
                 })
             except Exception as e:
                 continue
 
-        print(f"✅ Investing 일정 {len(result)}건 가져옴")
+        print(f"✅ Investing 일정 {len(result)}건 가져옴 (XHR 방식)")
         return result
 
     except Exception as e:
-        print(f"❌ Investing 크롤링 실패: {e}")
+        print(f"❌ Investing XHR 크롤링 실패: {e}")
         return []
 
 def notify_schedule(event):
