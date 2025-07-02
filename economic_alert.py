@@ -1,11 +1,18 @@
 import requests
-from bs4 import BeautifulSoup  # ✅ 누락된 부분
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
+from bs4 import BeautifulSoup
 
 from config import USER_IDS, API_URL
-import pytz
+
+# 필터 기준
+allowed_countries = ['USD', 'EUR', 'JPY', 'GBP', 'KRW']
+important_keywords = [
+    "interest", "cpi", "gdp", "unemployment", "employment", "jobless",
+    "inflation", "fomc", "rate", "press conference", "manufacturing",
+    "retail", "ppi", "pmi"
+]
 
 # 전역 일정 저장소
 all_schedules = []
@@ -32,22 +39,16 @@ def fetch_investing_schedule():
         print("📡 Investing 일정 요청 중 (BeautifulSoup)...")
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
-
         rows = soup.select("tr.js-event-item")
         now = datetime.utcnow()
         result = []
-
-        # ✅ 허용 국가 목록
-        allowed_countries = ['USD', 'EUR', 'JPY', 'GBP', 'KRW']
 
         for row in rows:
             try:
                 timestamp = row.get("data-event-datetime")
                 if not timestamp:
                     continue
-
-                # ✅ 날짜 형식 변경: '2025/07/02 04:00:00'
-                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")  # ← 포맷 수정!
 
                 if dt.month != now.month:
                     continue
@@ -60,38 +61,26 @@ def fetch_investing_schedule():
                 country = country_el.text.strip() if country_el else "N/A"
                 impact_level = len(impact_el.select('i')) if impact_el else 0
 
-                # ✅ 필터: Level 3 이면서 지정된 주요국가만
-                if impact_level == 3 and country in allowed_countries:
+                if (
+                    impact_level == 3 and
+                    country in allowed_countries and
+                    any(k in title.lower() for k in important_keywords)
+                ):
                     result.append({
                         "datetime": dt,
-                        "title": f"[{country}/Level 3] {title}"
+                        "title": f"[{country}/Level {impact_level}] {title}"
                     })
 
             except Exception as e:
                 print(f"❌ 이벤트 파싱 오류: {e}")
                 continue
 
-        print(f"✅ Investing 일정 {len(result)}건 가져옴 (Level 3 + 주요국가 필터 적용)")
+        print(f"✅ Investing 일정 {len(result)}건 가져옴 (BeautifulSoup 방식)")
         return result
 
     except Exception as e:
         print(f"❌ Investing BeautifulSoup 크롤링 실패: {e}")
         return []
-
-def test_investing_connection():
-    try:
-        url = "https://www.investing.com/economic-calendar/"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers)
-        print(f"🔍 Status Code: {res.status_code}")
-        print(f"🔍 Content Length: {len(res.text)}")
-        if res.status_code == 200:
-            print("✅ 연결 성공 (Render에서 investing.com 접속 가능)")
-        else:
-            print("❌ 비정상 응답 코드")
-    except Exception as e:
-        print(f"❌ 연결 실패: {e}")
-
 
 def notify_schedule(event):
     local_dt = event['datetime'] + timedelta(hours=9)  # KST
@@ -104,12 +93,7 @@ def get_this_week_schedule():
 def get_this_month_schedule():
     now = datetime.utcnow()
     end = now + timedelta(days=31)
-    return [
-        e for e in all_schedules
-        if now <= e['datetime'] <= end
-    ]
-
-test_investing_connection()
+    return [e for e in all_schedules if now <= e['datetime'] <= end]
 
 def start_economic_schedule():
     global all_schedules
@@ -127,10 +111,8 @@ def start_economic_schedule():
             if 3540 <= delta <= 3660:  # 약 1시간 전
                 notify_schedule(event)
 
-    # 스케줄러 설정 (thread pool 안정화 포함)
     executors = {'default': ThreadPoolExecutor(5)}
     scheduler = BackgroundScheduler(executors=executors, timezone="UTC")
-
     refresh_schedule()
     scheduler.add_job(refresh_schedule, 'interval', hours=3)
     scheduler.add_job(check_upcoming, 'interval', minutes=1)
