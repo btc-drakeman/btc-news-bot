@@ -265,13 +265,17 @@ def telegram_webhook():
     return '', 200
 
 if __name__ == '__main__':
-    # Flask 서버 실행 (백그라운드)
+    # Flask 서버 실행 (데몬 스레드 아님, blocking 되지 않도록 lambda)
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
 
-    # 경제 일정 스케줄러는 1초 지연 후 실행 (안정화)
-    time.sleep(1)
-    Thread(target=start_economic_schedule).start()
+    # 기술 분석 루프 실행 (데몬)
+    Thread(target=analysis_loop, daemon=True).start()
 
-    # 기술 분석 루프 실행
-    Thread(target=analysis_loop).start()
+    # 경제 일정 스케줄러 실행 (데몬)
+    Thread(target=start_economic_schedule, daemon=True).start()
+
+    # 메인 스레드는 대기 (영원히)
+    while True:
+        time.sleep(60)
+
 
