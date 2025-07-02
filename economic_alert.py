@@ -33,15 +33,20 @@ def fetch_investing_schedule():
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        rows = soup.select("tr[data-event-datetime]")
+        rows = soup.select("tr.js-event-item")
         now = datetime.utcnow()
         result = []
+
+        # ✅ 허용 국가 목록
+        allowed_countries = ['USD', 'EUR', 'JPY', 'GBP', 'KRW']
 
         for row in rows:
             try:
                 timestamp = row.get("data-event-datetime")
                 if not timestamp:
                     continue
+
+                # ✅ 날짜 형식 변경: '2025/07/02 04:00:00'
                 dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
 
                 if dt.month != now.month:
@@ -53,17 +58,20 @@ def fetch_investing_schedule():
 
                 title = title_el.text.strip() if title_el else "No Title"
                 country = country_el.text.strip() if country_el else "N/A"
-                impact = f"{len(impact_el.select('i'))} Level" if impact_el else "N/A"
+                impact_level = len(impact_el.select('i')) if impact_el else 0
 
-                result.append({
-                    "datetime": dt,
-                    "title": f"[{country}/{impact}] {title}"
-                })
+                # ✅ 필터: Level 3 이면서 지정된 주요국가만
+                if impact_level == 3 and country in allowed_countries:
+                    result.append({
+                        "datetime": dt,
+                        "title": f"[{country}/Level 3] {title}"
+                    })
+
             except Exception as e:
                 print(f"❌ 이벤트 파싱 오류: {e}")
                 continue
 
-        print(f"✅ Investing 일정 {len(result)}건 가져옴 (BeautifulSoup 방식)")
+        print(f"✅ Investing 일정 {len(result)}건 가져옴 (Level 3 + 주요국가 필터 적용)")
         return result
 
     except Exception as e:
