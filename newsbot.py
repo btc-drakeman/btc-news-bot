@@ -254,7 +254,7 @@ def telegram_webhook():
                 send_telegram(f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
     return '', 200
 
-iif __name__ == '__main__':
+if __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
     
     # 📌 1. 먼저 경제 일정 스케줄러 시작
