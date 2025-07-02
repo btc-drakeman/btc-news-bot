@@ -254,8 +254,13 @@ def telegram_webhook():
                 send_telegram(f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
     return '', 200
 
-if __name__ == '__main__':
+iif __name__ == '__main__':
     print("🟢 기술분석 봇 실행 시작")
+    
+    # 📌 1. 먼저 경제 일정 스케줄러 시작
+    from economic_alert import start_economic_schedule
+    start_economic_schedule()  # Thread 없이 직접 실행
+
+    # 📌 2. Flask 앱 & 분석 루프는 Thread로 유지
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop).start()
-    Thread(target=start_economic_schedule).start()
