@@ -22,33 +22,27 @@ def send_telegram(text):
             print(f"❌ 알림 전송 실패: {e}")
 
 def fetch_forexfactory_schedule():
-    url = "https://www.forexfactory.com/calendar"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    rows = soup.select("tr.calendar__row")
-    result = []
+    from datetime import datetime, timedelta
 
-    for row in rows:
-        try:
-            date_str = row.get('data-event-datetime')
-            title = row.select_one(".calendar__event-title").text.strip()
-            impact = row.select_one(".impact-icon")['title'].strip()
-            country = row.select_one(".calendar__country").text.strip()
+    now = datetime.utcnow()
 
-            if not date_str:
-                continue
-
-            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
-            result.append({
-                'datetime': dt,  # UTC 기준
-                'title': f"[{country}/{impact}] {title}"
-            })
-        except Exception as e:
-            continue
-
-    return result
+    return [
+        {
+            "datetime": now + timedelta(minutes=70),  # 약 1시간 후
+            "title": "🇺🇸 FOMC Meeting Minutes 발표",
+            "impact": "High"
+        },
+        {
+            "datetime": now + timedelta(days=1),
+            "title": "🇪🇺 유럽중앙은행(ECB) 금리결정",
+            "impact": "High"
+        },
+        {
+            "datetime": now + timedelta(days=3),
+            "title": "🇨🇳 중국 GDP 발표",
+            "impact": "Medium"
+        }
+    ]
 
 def notify_schedule(event):
     local_dt = event['datetime'] + timedelta(hours=9)  # KST
