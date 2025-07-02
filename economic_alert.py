@@ -1,20 +1,11 @@
 import requests
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
-from bs4 import BeautifulSoup
-
 from config import USER_IDS, API_URL
 
-# 필터 기준
-allowed_countries = ['USD', 'EUR', 'JPY', 'GBP', 'KRW']
-important_keywords = [
-    "interest", "cpi", "gdp", "unemployment", "employment", "jobless",
-    "inflation", "fomc", "rate", "press conference", "manufacturing",
-    "retail", "ppi", "pmi"
-]
-
-# 전역 일정 저장소
+# ✅ 일정 저장용
 all_schedules = []
 
 def send_telegram(text):
@@ -28,6 +19,38 @@ def send_telegram(text):
         except Exception as e:
             print(f"❌ 알림 전송 실패: {e}")
 
+# ✅ 필터 기준
+allowed_countries = ["USD"]
+important_keywords = [
+    "interest", "rate", "fomc", "fed", "inflation", "cpi", "ppi",
+    "unemployment", "jobless", "non-farm", "retail", "gdp", "pce", "core"
+]
+
+# ✅ 한글 번역 맵
+translation_map = {
+    "interest": "금리",
+    "rate": "금리",
+    "fomc": "FOMC 회의",
+    "fed": "연준 관련",
+    "inflation": "인플레이션",
+    "cpi": "소비자물가지수(CPI)",
+    "ppi": "생산자물가지수(PPI)",
+    "unemployment": "실업률",
+    "jobless": "실업률",
+    "non-farm": "비농업고용",
+    "retail": "소매판매",
+    "gdp": "GDP",
+    "pce": "개인소비지출(PCE)",
+    "core": "근원 지표"
+}
+
+def translate_title(title):
+    title_lower = title.lower()
+    for eng, kor in translation_map.items():
+        if eng in title_lower:
+            return f"{kor} 관련 발표: {title}"
+    return title
+
 def fetch_investing_schedule():
     url = "https://www.investing.com/economic-calendar/"
     headers = {
@@ -39,6 +62,7 @@ def fetch_investing_schedule():
         print("📡 Investing 일정 요청 중 (BeautifulSoup)...")
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
+
         rows = soup.select("tr.js-event-item")
         now = datetime.utcnow()
         result = []
@@ -48,8 +72,8 @@ def fetch_investing_schedule():
                 timestamp = row.get("data-event-datetime")
                 if not timestamp:
                     continue
-                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")  # ← 포맷 수정!
 
+                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
                 if dt.month != now.month:
                     continue
 
@@ -57,29 +81,36 @@ def fetch_investing_schedule():
                 country_el = row.select_one(".flagCur")
                 impact_el = row.select_one(".sentiment")
 
-                title = title_el.text.strip() if title_el else "No Title"
-                country = country_el.text.strip() if country_el else "N/A"
-                impact_level = len(impact_el.select('i')) if impact_el else 0
+                if not title_el or not country_el or not impact_el:
+                    continue
 
-                if (
-                    impact_level == 3 and
-                    country in allowed_countries and
-                    any(k in title.lower() for k in important_keywords)
-                ):
-                    result.append({
-                        "datetime": dt,
-                        "title": f"[{country}/Level {impact_level}] {title}"
-                    })
+                title = title_el.text.strip()
+                country = country_el.text.strip()
+                impact_level = len(impact_el.select("i"))
+
+                if country not in allowed_countries:
+                    continue
+                if impact_level != 3:
+                    continue
+
+                if not any(k in title.lower() for k in important_keywords):
+                    continue
+
+                translated = translate_title(title)
+                result.append({
+                    "datetime": dt,
+                    "title": f"[{country}/★★★] {translated}"
+                })
 
             except Exception as e:
                 print(f"❌ 이벤트 파싱 오류: {e}")
                 continue
 
-        print(f"✅ Investing 일정 {len(result)}건 가져옴 (BeautifulSoup 방식)")
+        print(f"✅ Investing 일정 {len(result)}건 가져옴 (USD 중심 Level3 필터)")
         return result
 
     except Exception as e:
-        print(f"❌ Investing BeautifulSoup 크롤링 실패: {e}")
+        print(f"❌ Investing 크롤링 실패: {e}")
         return []
 
 def notify_schedule(event):
@@ -93,7 +124,25 @@ def get_this_week_schedule():
 def get_this_month_schedule():
     now = datetime.utcnow()
     end = now + timedelta(days=31)
-    return [e for e in all_schedules if now <= e['datetime'] <= end]
+    return [
+        e for e in all_schedules
+        if now <= e['datetime'] <= end
+    ]
+
+def format_monthly_schedule_message():
+    print("📤 /event 명령 처리 시작됨")
+    events = fetch_investing_schedule()
+    if not events:
+        return "📅 이번 달 예정된 주요 경제 일정이 없습니다."
+
+    msg = "\n📅 <b>이번 달 주요 경제 일정</b>\n\n"
+    for e in events:
+        local_time = e['datetime'] + timedelta(hours=9)
+        msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
+    return msg
+
+def handle_event_command():
+    return format_monthly_schedule_message()
 
 def start_economic_schedule():
     global all_schedules
@@ -113,6 +162,7 @@ def start_economic_schedule():
 
     executors = {'default': ThreadPoolExecutor(5)}
     scheduler = BackgroundScheduler(executors=executors, timezone="UTC")
+
     refresh_schedule()
     scheduler.add_job(refresh_schedule, 'interval', hours=3)
     scheduler.add_job(check_upcoming, 'interval', minutes=1)
