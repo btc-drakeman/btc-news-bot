@@ -133,9 +133,9 @@ def format_monthly_schedule_message():
     print("📤 /event 명령 처리 시작됨")
     events = fetch_investing_schedule()
     if not events:
-        return "📅 이번 달 예정된 주요 경제 일정이 없습니다."
+        return "📅 2~3일 내 예정된 주요 경제 일정이 없습니다."
 
-    msg = "\n📅 <b>이번 달 주요 경제 일정</b>\n\n"
+    msg = "\n📅 <b>2~3일 내 주요 경제 일정</b>\n\n"
     for e in events:
         local_time = e['datetime'] + timedelta(hours=9)
         msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
