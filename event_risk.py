@@ -1,6 +1,9 @@
-from economic_alert import get_this_week_schedule, get_this_month_schedule
+from economic_alert import (
+    fetch_investing_schedule,   # ✅ /event 명령에서 실시간 크롤링
+    get_this_week_schedule,     # ✅ 자동 알림용 캐시 스케줄
+    get_this_month_schedule     # ✅ 여전히 자동 알림엔 사용
+)
 from datetime import datetime, timedelta
-
 
 def check_event_risk(symbol, current_time, window_minutes=180):
     """
@@ -27,9 +30,13 @@ def adjust_direction_based_on_event(symbol, direction, now):
 
 
 def format_monthly_schedule_message():
-    events = get_this_month_schedule()
+    """
+    /event 명령어에서 사용하는 실시간 크롤링 기반 메시지 생성
+    """
+    events = fetch_investing_schedule()  # ✅ 최신 Investing.com 일정 실시간 요청
+
     if not events:
-        return "이번 달 예정된 주요 경제 일정이 없습니다."
+        return "📅 이번 달 예정된 주요 경제 일정이 없습니다."
 
     msg = "\n📅 <b>이번 달 주요 경제 일정</b>\n\n"
     for e in events:
