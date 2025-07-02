@@ -123,7 +123,7 @@ def get_this_week_schedule():
 
 def get_this_month_schedule():
     now = datetime.utcnow()
-    end = now + timedelta(days=31)
+    end = now + timedelta(days=3)
     return [
         e for e in all_schedules
         if now <= e['datetime'] <= end
