@@ -3,11 +3,13 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
+from pytz import timezone
 from config import USER_IDS, API_URL
 
 # ✅ 일정 저장용
 all_schedules = []
 
+# ✅ 텔레그램 메시지 발송
 def send_telegram(text):
     for uid in USER_IDS:
         try:
@@ -44,6 +46,7 @@ translation_map = {
     "core": "근원 지표"
 }
 
+# ✅ 제목 번역 함수
 def translate_title(title):
     title_lower = title.lower()
     for eng, kor in translation_map.items():
@@ -51,6 +54,7 @@ def translate_title(title):
             return f"{kor} 관련 발표: {title}"
     return title
 
+# ✅ 투자닷컴 일정 크롤링 (KST 기준)
 def fetch_investing_schedule():
     url = "https://www.investing.com/economic-calendar/"
     headers = {
@@ -64,7 +68,7 @@ def fetch_investing_schedule():
         soup = BeautifulSoup(response.text, "html.parser")
 
         rows = soup.select("tr.js-event-item")
-        now = datetime.utcnow()
+        now = datetime.now(timezone("Asia/Seoul"))
         result = []
 
         for row in rows:
@@ -74,7 +78,7 @@ def fetch_investing_schedule():
                     continue
 
                 dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
-                if dt.month != now.month:
+                if not (now <= dt <= now + timedelta(days=3)):
                     continue
 
                 title_el = row.select_one(".event")
@@ -92,7 +96,6 @@ def fetch_investing_schedule():
                     continue
                 if impact_level != 3:
                     continue
-
                 if not any(k in title.lower() for k in important_keywords):
                     continue
 
@@ -106,30 +109,22 @@ def fetch_investing_schedule():
                 print(f"❌ 이벤트 파싱 오류: {e}")
                 continue
 
-        print(f"✅ Investing 일정 {len(result)}건 가져옴 (USD 중심 Level3 필터)")
+        print(f"✅ Investing 일정 {len(result)}건 가져옴 (USD 중심 Level3 필터, 3일 이내)")
         return result
 
     except Exception as e:
         print(f"❌ Investing 크롤링 실패: {e}")
         return []
 
+# ✅ 알림 전송
 def notify_schedule(event):
-    local_dt = event['datetime'] + timedelta(hours=9)  # KST
+    local_dt = event['datetime']  # 이미 한국 시간임
     msg = f"📢 <b>경제 일정 알림</b>\n⏰ {local_dt.strftime('%m/%d %H:%M')} KST\n📝 {event['title']}"
     send_telegram(msg)
 
-def get_this_week_schedule():
-    return all_schedules
+# ✅ 수동 호출 메시지
 
-def get_this_month_schedule():
-    now = datetime.utcnow()
-    end = now + timedelta(days=3)
-    return [
-        e for e in all_schedules
-        if now <= e['datetime'] <= end
-    ]
-
-def format_monthly_schedule_message():
+def format_schedule_message():
     print("📤 /event 명령 처리 시작됨")
     events = fetch_investing_schedule()
     if not events:
@@ -137,13 +132,13 @@ def format_monthly_schedule_message():
 
     msg = "\n📅 <b>2~3일 내 주요 경제 일정</b>\n\n"
     for e in events:
-        local_time = e['datetime'] + timedelta(hours=9)
-        msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
+        msg += f"🗓 {e['datetime'].strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
     return msg
 
 def handle_event_command():
-    return format_monthly_schedule_message()
+    return format_schedule_message()
 
+# ✅ 백그라운드 스케줄 시작
 def start_economic_schedule():
     global all_schedules
     print("📡 경제 일정 알림 기능 시작")
@@ -154,14 +149,14 @@ def start_economic_schedule():
         print(f"🔄 경제 일정 {len(all_schedules)}건 업데이트 완료")
 
     def check_upcoming():
-        now = datetime.utcnow()
+        now = datetime.now(timezone("Asia/Seoul"))
         for event in all_schedules:
             delta = (event['datetime'] - now).total_seconds()
-            if 3540 <= delta <= 3660:  # 약 1시간 전
+            if 3540 <= delta <= 3660:
                 notify_schedule(event)
 
     executors = {'default': ThreadPoolExecutor(5)}
-    scheduler = BackgroundScheduler(executors=executors, timezone="UTC")
+    scheduler = BackgroundScheduler(executors=executors, timezone="Asia/Seoul")
 
     refresh_schedule()
     scheduler.add_job(refresh_schedule, 'interval', hours=3)
