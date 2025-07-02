@@ -21,28 +21,23 @@ def send_telegram(text):
         except Exception as e:
             print(f"❌ 알림 전송 실패: {e}")
 
-import requests
-from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-
-# Investing.com 크롤링 함수 복붙
+# ★ Investing.com 검색 함수 갱신
 def fetch_investing_schedule():
-    import requests
-    from bs4 import BeautifulSoup
-    from datetime import datetime, timedelta
+    print("🟡 Investing 일정 크롤링 시작문")
 
     url = "https://www.investing.com/economic-calendar/"
     headers = {
         'User-Agent': 'Mozilla/5.0',
         'Referer': 'https://www.investing.com/',
     }
-    
+
     try:
         response = requests.get(url, headers=headers)
         soup = BeautifulSoup(response.text, "html.parser")
 
         table = soup.find("table", {"id": "economicCalendarData"})
         rows = table.find_all("tr", {"event_timestamp": True})
+        print(f"➞ rows 수: {len(rows)}")
 
         result = []
         now = datetime.utcnow() + timedelta(hours=9)  # 한국시간
@@ -51,9 +46,9 @@ def fetch_investing_schedule():
             try:
                 timestamp = int(row["event_timestamp"])
                 dt = datetime.utcfromtimestamp(timestamp) + timedelta(hours=9)
-                
+
                 if dt.month != now.month:
-                    continue  # 이번 달 일정만 추출
+                    continue  # 이보다 다른 달은 비가
 
                 country_el = row.find("td", class_="flagCur")
                 country = country_el.text.strip() if country_el else "N/A"
@@ -69,9 +64,10 @@ def fetch_investing_schedule():
                     "title": f"[{country}/{impact}] {title}"
                 })
             except Exception as e:
+                print(f" - 시험적 오류: {e}")
                 continue
 
-        print(f"✅ Investing 일정 {len(result)}건 가져옴")
+        print(f"✅ Investing 일정 {len(result)}개 가져옴")
         return result
 
     except Exception as e:
@@ -80,7 +76,7 @@ def fetch_investing_schedule():
 
 def notify_schedule(event):
     local_dt = event['datetime'] + timedelta(hours=9)  # KST
-    msg = f"📢 <b>경제 일정 알림</b>\n⏰ {local_dt.strftime('%m/%d %H:%M')} KST\n📝 {event['title']}"
+    msg = f"📢 <b>경제 일정 알림</b>\n⏰ {local_dt.strftime('%m/%d %H:%M')} KST\n📜 {event['title']}"
     send_telegram(msg)
 
 def get_this_week_schedule():
@@ -96,21 +92,20 @@ def get_this_month_schedule():
 
 def start_economic_schedule():
     global all_schedules
-    print("📡 경제 일정 알림 기능 시작")
+    print("🛱 경제 일정 알림 기능 시작")
 
     def refresh_schedule():
         global all_schedules
         all_schedules = fetch_investing_schedule()
-        print(f"🔄 경제 일정 {len(all_schedules)}건 업데이트 완료")
+        print(f"🔄 경제 일정 {len(all_schedules)}개 업데이트 완료")
 
     def check_upcoming():
         now = datetime.utcnow()
         for event in all_schedules:
             delta = (event['datetime'] - now).total_seconds()
-            if 3540 <= delta <= 3660:  # 약 1시간 전
+            if 3540 <= delta <= 3660:  # 일정 1시간 전
                 notify_schedule(event)
 
-    # 스케줄러 설정 (thread pool 안정화 포함)
     executors = {'default': ThreadPoolExecutor(5)}
     scheduler = BackgroundScheduler(executors=executors, timezone="UTC")
 
