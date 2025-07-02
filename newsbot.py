@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import re
 from config import BOT_TOKEN, USER_IDS, API_URL
 from economic_alert import start_economic_schedule
-from event_risk import adjust_direction_based_on_event
+from event_risk import adjust_direction_based_on_event, handle_event_command
 
 # 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
@@ -257,6 +257,11 @@ def telegram_webhook():
                 send_telegram(msg, chat_id=chat_id)
             else:
                 send_telegram(f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
+
+        elif text.strip().lower() == "/event":
+            event_msg = handle_event_command()
+            send_telegram(event_msg, chat_id=chat_id)
+
     return '', 200
 
 if __name__ == '__main__':
