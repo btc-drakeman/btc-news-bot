@@ -51,7 +51,10 @@ def start_economic_schedule():
     scheduler = BackgroundScheduler(timezone='Asia/Seoul')
     scheduler.add_job(send_weekly_schedule, 'cron', day_of_week='mon', hour=9, minute=0)
     schedule_alerts(scheduler)
-    scheduler.start()
+
     print("📡 경제 일정 알림 기능 시작")
-    while True:
-        time.sleep(60)
+    scheduler.start()  # start는 여기서 먼저 호출
+
+    # ➤ 별도 루프 쓰지 않고 scheduler가 자체적으로 관리함 (삭제 가능)
+    # while True:
+    #     time.sleep(60)
