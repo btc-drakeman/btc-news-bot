@@ -5,6 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ThreadPoolExecutor
 from config import USER_IDS, API_URL
 
+# ✅ 일정 저장용
 all_schedules = []
 
 def send_telegram(text):
@@ -18,12 +19,14 @@ def send_telegram(text):
         except Exception as e:
             print(f"❌ 알림 전송 실패: {e}")
 
+# ✅ 필터 기준
 allowed_countries = ["USD"]
 important_keywords = [
     "interest", "rate", "fomc", "fed", "inflation", "cpi", "ppi",
     "unemployment", "jobless", "non-farm", "retail", "gdp", "pce", "core"
 ]
 
+# ✅ 한글 번역 맵
 translation_map = {
     "interest": "금리",
     "rate": "금리",
@@ -70,12 +73,7 @@ def fetch_investing_schedule():
                 if not timestamp:
                     continue
 
-                # ✅ 시간 형식 자동 감지
-                try:
-                    dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
-                except ValueError:
-                    dt = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S")
-
+                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
                 if dt.month != now.month:
                     continue
 
@@ -116,15 +114,16 @@ def fetch_investing_schedule():
         return []
 
 def notify_schedule(event):
-    msg = f"📢 <b>경제 일정 알림</b>\n⏰ {event['datetime'].strftime('%m/%d %H:%M')} KST\n📝 {event['title']}"
+    local_dt = event['datetime'] + timedelta(hours=9)  # KST
+    msg = f"📢 <b>경제 일정 알림</b>\n⏰ {local_dt.strftime('%m/%d %H:%M')} KST\n📝 {event['title']}"
     send_telegram(msg)
 
 def get_this_week_schedule():
     return all_schedules
 
 def get_this_month_schedule():
-    now = datetime.utcnow() + timedelta(hours=9)
-    end = now + timedelta(days=3)
+    now = datetime.utcnow()
+    end = now + timedelta(days=31)
     return [
         e for e in all_schedules
         if now <= e['datetime'] <= end
@@ -138,7 +137,8 @@ def format_monthly_schedule_message():
 
     msg = "\n📅 <b>2~3일 내 주요 경제 일정</b>\n\n"
     for e in events:
-        msg += f"🗓 {e['datetime'].strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
+        local_time = e['datetime'] + timedelta(hours=9)
+        msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
     return msg
 
 def handle_event_command():
@@ -154,7 +154,7 @@ def start_economic_schedule():
         print(f"🔄 경제 일정 {len(all_schedules)}건 업데이트 완료")
 
     def check_upcoming():
-        now = datetime.utcnow() + timedelta(hours=9)
+        now = datetime.utcnow()
         for event in all_schedules:
             delta = (event['datetime'] - now).total_seconds()
             if 3540 <= delta <= 3660:  # 약 1시간 전
