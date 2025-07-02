@@ -21,28 +21,50 @@ def send_telegram(text):
         except Exception as e:
             print(f"❌ 알림 전송 실패: {e}")
 
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+
+# 여기 ↓ 함수 복붙
 def fetch_forexfactory_schedule():
-    from datetime import datetime, timedelta
+    url = "https://www.forexfactory.com/calendar"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(url, headers=headers)
+    soup = BeautifulSoup(response.text, 'html.parser')
 
-    now = datetime.utcnow()
+    rows = soup.select("tr.calendar__row--expandable")
+    result = []
 
-    return [
-        {
-            "datetime": now + timedelta(minutes=70),  # 약 1시간 후
-            "title": "🇺🇸 FOMC Meeting Minutes 발표",
-            "impact": "High"
-        },
-        {
-            "datetime": now + timedelta(days=1),
-            "title": "🇪🇺 유럽중앙은행(ECB) 금리결정",
-            "impact": "High"
-        },
-        {
-            "datetime": now + timedelta(days=3),
-            "title": "🇨🇳 중국 GDP 발표",
-            "impact": "Medium"
-        }
-    ]
+    for row in rows:
+        try:
+            date_str = row.get('data-event-datetime')
+            if not date_str:
+                continue
+
+            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
+
+            title_el = row.select_one(".calendar__event-title")
+            if not title_el:
+                continue
+            title = title_el.text.strip()
+
+            country_el = row.select_one(".calendar__country")
+            country = country_el.text.strip() if country_el else "N/A"
+
+            impact_el = row.select_one(".impact-icon")
+            impact = impact_el['title'].strip() if impact_el else "Low"
+
+            result.append({
+                'datetime': dt,
+                'title': f"[{country}/{impact}] {title}"
+            })
+
+        except Exception as e:
+            print(f"❌ 에러 발생: {e}")
+            continue
+
+    print(f"✅ 총 가져온 일정 수: {len(result)}")
+    return result
 
 def notify_schedule(event):
     local_dt = event['datetime'] + timedelta(hours=9)  # KST
