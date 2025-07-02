@@ -259,6 +259,7 @@ def telegram_webhook():
                 send_telegram(f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
 
         elif text.strip().lower() == "/event":
+            print("📩 /event 명령 수신됨")  # 🔧 로그로 확인
             event_msg = handle_event_command()
             send_telegram(event_msg, chat_id=chat_id)
 
