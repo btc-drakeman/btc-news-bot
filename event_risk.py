@@ -36,15 +36,22 @@ def format_monthly_schedule_message():
     print("📤 /event 명령 처리 시작됨")  # ✅ 확인용 로그
 
     events = fetch_investing_schedule()  # ✅ 최신 Investing.com 일정 실시간 요청
+    now = datetime.utcnow()
+    near_future = now + timedelta(days=3)
 
-    if not events:
+    # ✅ 3일 이내 일정만 필터링
+    filtered = [
+        e for e in events if now <= e['datetime'] <= near_future
+    ]
+
+    if not filtered:
         print("⚠️ 일정이 0건입니다.")
-        return "📅 이번 달 예정된 주요 경제 일정이 없습니다."
+        return "📅 2~3일 내 예정된 주요 경제 일정이 없습니다."
 
-    print(f"📥 총 {len(events)}건의 일정 수집됨")  # ✅ 일정 수 표시
+    print(f"📥 총 {len(filtered)}건의 일정 수집됨")  # ✅ 일정 수 표시
 
-    msg = "\n📅 <b>이번 달 주요 경제 일정</b>\n\n"
-    for e in events:
+    msg = "\n📅 <b>2~3일 내 주요 경제 일정</b>\n\n"
+    for e in filtered:
         local_time = e['datetime'] + timedelta(hours=9)  # UTC → KST
         msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
     return msg
