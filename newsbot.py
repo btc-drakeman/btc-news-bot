@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import re
 from config import BOT_TOKEN, USER_IDS, API_URL
 from economic_alert import start_economic_schedule
+from event_risk import adjust_direction_based_on_event
 
 # 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
@@ -203,6 +204,10 @@ def analyze_symbol(symbol, leverage=None):
         direction = "숏 (Short)"
     else:
         direction = "관망"
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    direction, reasons = adjust_direction_based_on_event(symbol, direction, now_kst)
+    for r in reasons:
+        explain.append(f"⚠️ 외부 이벤트 반영: {r}")
 
     df = fetch_ohlcv(symbol)  # 1분봉으로 entry range 계산용
     if df is None:
