@@ -33,7 +33,7 @@ def fetch_investing_schedule():
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, "html.parser")
 
-        rows = soup.select("tr.js-event-item")
+        rows = soup.select("tr[data-event-datetime]")
         now = datetime.utcnow()
         result = []
 
