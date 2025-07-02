@@ -265,12 +265,13 @@ def telegram_webhook():
     return '', 200
 
 if __name__ == '__main__':
-    print("🟢 기술분석 봇 실행 시작")
-    
-    # 📌 1. 먼저 경제 일정 스케줄러 시작
-    from economic_alert import start_economic_schedule
-    start_economic_schedule()  # Thread 없이 직접 실행
-
-    # 📌 2. Flask 앱 & 분석 루프는 Thread로 유지
+    # Flask 서버 실행 (백그라운드)
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
+
+    # 경제 일정 스케줄러는 1초 지연 후 실행 (안정화)
+    time.sleep(1)
+    Thread(target=start_economic_schedule).start()
+
+    # 기술 분석 루프 실행
     Thread(target=analysis_loop).start()
+
