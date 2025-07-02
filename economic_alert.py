@@ -25,46 +25,58 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
-# 여기 ↓ 함수 복붙
-def fetch_forexfactory_schedule():
-    url = "https://www.forexfactory.com/calendar"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, 'html.parser')
+# Investing.com 크롤링 함수 복붙
+def fetch_investing_schedule():
+    import requests
+    from bs4 import BeautifulSoup
+    from datetime import datetime, timedelta
 
-    rows = soup.select("tr.calendar__row--expandable")
-    result = []
+    url = "https://www.investing.com/economic-calendar/"
+    headers = {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://www.investing.com/',
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, "html.parser")
 
-    for row in rows:
-        try:
-            date_str = row.get('data-event-datetime')
-            if not date_str:
+        table = soup.find("table", {"id": "economicCalendarData"})
+        rows = table.find_all("tr", {"event_timestamp": True})
+
+        result = []
+        now = datetime.utcnow() + timedelta(hours=9)  # 한국시간
+
+        for row in rows:
+            try:
+                timestamp = int(row["event_timestamp"])
+                dt = datetime.utcfromtimestamp(timestamp) + timedelta(hours=9)
+                
+                if dt.month != now.month:
+                    continue  # 이번 달 일정만 추출
+
+                country_el = row.find("td", class_="flagCur")
+                country = country_el.text.strip() if country_el else "N/A"
+
+                impact_el = row.find("td", class_="sentiment")
+                impact = f"{len(impact_el.find_all('i'))} Level" if impact_el else "N/A"
+
+                title_el = row.find("td", class_="event")
+                title = title_el.text.strip() if title_el else "No Title"
+
+                result.append({
+                    "datetime": dt,
+                    "title": f"[{country}/{impact}] {title}"
+                })
+            except Exception as e:
                 continue
 
-            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
+        print(f"✅ Investing 일정 {len(result)}건 가져옴")
+        return result
 
-            title_el = row.select_one(".calendar__event-title")
-            if not title_el:
-                continue
-            title = title_el.text.strip()
-
-            country_el = row.select_one(".calendar__country")
-            country = country_el.text.strip() if country_el else "N/A"
-
-            impact_el = row.select_one(".impact-icon")
-            impact = impact_el['title'].strip() if impact_el else "Low"
-
-            result.append({
-                'datetime': dt,
-                'title': f"[{country}/{impact}] {title}"
-            })
-
-        except Exception as e:
-            print(f"❌ 에러 발생: {e}")
-            continue
-
-    print(f"✅ 총 가져온 일정 수: {len(result)}")
-    return result
+    except Exception as e:
+        print(f"❌ Investing 크롤링 실패: {e}")
+        return []
 
 def notify_schedule(event):
     local_dt = event['datetime'] + timedelta(hours=9)  # KST
@@ -88,7 +100,7 @@ def start_economic_schedule():
 
     def refresh_schedule():
         global all_schedules
-        all_schedules = fetch_forexfactory_schedule()
+        all_schedules = fetch_investing_schedule()
         print(f"🔄 경제 일정 {len(all_schedules)}건 업데이트 완료")
 
     def check_upcoming():
