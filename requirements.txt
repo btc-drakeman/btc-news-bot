@@ -7,3 +7,4 @@ pandas_ta==0.3.14b0
 matplotlib==3.7.1
 apscheduler==3.10.4
 investpy==1.0.8
+beautifulsoup4==4.12.3
