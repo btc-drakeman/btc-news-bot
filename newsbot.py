@@ -74,46 +74,64 @@ def calculate_indicators(df):
         df['ema_slope'] = 0
     return df
 
-def calculate_weighted_score_v2(last, prev, df):
+def calculate_weighted_score_v2(last, prev, df, explain):
     score = 0
     total_weight = 0
 
-    # 📈 RSI: 상승 추세이면 가점
+    # 📈 RSI
     if last['rsi'] > 55 and last['rsi'] > prev['rsi']:
         score += 1.0
+        explain.append("⚖️ RSI: 상승 흐름 → 강세 가능성")
+    else:
+        explain.append("⚖️ RSI: 중립 또는 하락 흐름")
     total_weight += 1.0
 
-    # 📊 MACD: 골든크로스 or 히스토그램 증가
+    # 📊 MACD
     macd_hist_last = last['macd'] - last['signal']
     macd_hist_prev = prev['macd'] - prev['signal']
     if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
         score += 1.0
+        explain.append("📊 MACD: 골든크로스 ↗️ 전환 신호")
     elif macd_hist_last > macd_hist_prev and macd_hist_last > 0:
         score += 0.5
+        explain.append("📊 MACD: 히스토그램 증가 ↗️ 모멘텀 강화")
+    else:
+        explain.append("📊 MACD: 특별한 변화 없음")
     total_weight += 1.5
 
-    # 📐 EMA: 단기 > 장기 + 벌어짐 증가
+    # 📐 EMA
     if last['ema_20'] > last['ema_50']:
         slope_gap = (last['ema_20'] - last['ema_50']) - (prev['ema_20'] - prev['ema_50'])
         if slope_gap > 0:
             score += 1.2
+            explain.append("📐 EMA: 벌어짐 + 기울기 상승 → 강한 상승 흐름")
         else:
             score += 0.6
+            explain.append("📐 EMA: 단기 > 장기 → 상승 구조 유지")
+    else:
+        explain.append("📐 EMA: 단기 < 장기 → 약세 흐름")
     total_weight += 1.2
 
-    # 📎 Bollinger: 중심선 상단 돌파 + 밴드 확장
+    # 📎 Bollinger
     band_width_now = last['boll_upper'] - last['boll_lower']
     band_width_prev = prev['boll_upper'] - prev['boll_lower']
     if last['close'] > last['bollinger_mid'] and band_width_now > band_width_prev:
         score += 0.8
+        explain.append("📎 Bollinger: 중심선 돌파 + 밴드 확장 → 강세 확률 ↑")
+    else:
+        explain.append("📎 Bollinger: 특별한 신호 없음")
     total_weight += 0.8
 
-    # 📊 거래량: 평균 이상 증가
+    # 📊 거래량
     try:
-        if last['volume'] > df['volume'].rolling(20).mean().iloc[-1] * 1.1:
+        avg_volume = df['volume'].rolling(20).mean().iloc[-1]
+        if last['volume'] > avg_volume * 1.1:
             score += 0.5
+            explain.append("📊 거래량: 평균 이상 증가 ↗️ 수급 강세")
+        else:
+            explain.append("📊 거래량: 뚜렷한 증가 없음")
     except:
-        pass
+        explain.append("📊 거래량: 계산 실패")
     total_weight += 0.5
 
     return round((score / total_weight) * 5, 2)
@@ -137,7 +155,7 @@ def analyze_multi_timeframe(symbol):
         last = df.iloc[-1]
         prev = df.iloc[-2]
         explain = []
-        score = calculate_weighted_score_v2(last, prev, df)
+        score = calculate_weighted_score_v2(last, prev, df, explain)
         total_score += score * weight
         total_weight += weight
         last_explain = explain  # 항상 저장
