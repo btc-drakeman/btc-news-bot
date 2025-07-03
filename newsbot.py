@@ -244,33 +244,42 @@ def home():
 
 @app.route(f"/bot{BOT_TOKEN}", methods=['POST'])
 def telegram_webhook():
-    print("🟢 텔레그램 요청 수신됨")  # 👈 추가
+    print("🟢 텔레그램 요청 수신됨")
     data = request.get_json()
-    print(f"📩 메시지 수신 데이터: {data}")  # 👈 추가
+    print(f"📩 전체 수신 데이터: {data}")
 
     if 'message' in data:
+        print("✅ message 키 존재")
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '')
-        print(f"💬 입력된 텍스트: {text}")  # 👈 추가
+        print(f"💬 입력된 텍스트(raw): {repr(text)}")  # ← 공백/줄바꿈 포함 확인용
 
-        if text.strip().lower() == "/event":
-            print("🧭 /event 명령어 분기 진입")  # 👈 추가
+        text_stripped = text.strip().lower()
+        print(f"📏 정제된 텍스트: {repr(text_stripped)}")
+
+        if text_stripped == "/event":
+            print("🧭 /event 명령어 분기 진입")
             event_msg = handle_event_command()
             send_telegram(event_msg, chat_id=chat_id)
 
         else:
-            match = re.match(r"/go (\w+)(?:\s+(\d+)x)?", text.strip(), re.IGNORECASE)
+            print("❌ /event 아님 → 다른 명령 시도")
+            match = re.match(r"/go (\w+)(?:\s+(\d+)x)?", text_stripped, re.IGNORECASE)
             if match:
                 symbol = match.group(1).upper()
                 leverage = int(match.group(2)) if match.group(2) else None
-                print(f"⚙️ 분석 시작: {symbol}, 레버리지={leverage}")  # 👈 추가
+                print(f"⚙️ 분석 시작: {symbol}, 레버리지={leverage}")
                 msg = analyze_symbol(symbol, leverage)
                 if msg:
                     send_telegram(msg, chat_id=chat_id)
                 else:
                     send_telegram(f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
 
+    else:
+        print("❌ 'message' 키가 없음")
+
     return '', 200
+
 
 if __name__ == '__main__':
     # Flask 서버 실행 (데몬 스레드 아님, blocking 되지 않도록 lambda)
