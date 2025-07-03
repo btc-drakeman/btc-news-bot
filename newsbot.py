@@ -17,6 +17,48 @@ SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT']
 
 app = Flask(__name__)
 
+# === 1. 코인별 최대 보유시간 (분 단위)
+symbol_max_hold_time = {
+    "BTCUSDT": 30,
+    "ETHUSDT": 75,
+    "XRPUSDT": 120,
+    "SOLUSDT": 45,
+}
+
+# === 2. 진입 포지션 추적용 메모리
+active_positions = {}  # 예: {"BTCUSDT": {"entry_time": datetime, "direction": "롱 (Long)", "entry_price": 12345.6}}
+
+# === 3. 진입 후 저장 함수 (명령어 /buy 입력 시 호출)
+def store_position(symbol, direction, entry_price):
+    active_positions[symbol.upper()] = {
+        "entry_time": datetime.utcnow(),
+        "direction": direction,
+        "entry_price": entry_price
+    }
+    print(f"✅ 포지션 기록됨: {symbol} / {direction} / {entry_price}")
+
+# === 4. 보유시간 초과 감시 루프 ===
+def position_monitor_loop():
+    while True:
+        now = datetime.utcnow()
+        for symbol, info in list(active_positions.items()):
+            max_hold = timedelta(minutes=symbol_max_hold_time.get(symbol, 60))
+            if now - info["entry_time"] >= max_hold:
+                kst_now = now + timedelta(hours=9)
+                entry_kst = info["entry_time"] + timedelta(hours=9)
+                message = f"""
+⏰ <b>{symbol} 포지션 보유시간 초과</b>
+📅 진입 시각 (KST): {entry_kst:%Y-%m-%d %H:%M}
+🕒 현재 시각 (KST): {kst_now:%Y-%m-%d %H:%M}
+📈 진입 방향: {info['direction']}
+💰 진입가: ${info['entry_price']:.2f}
+
+🚪 <b>최대 보유시간 도달 → 수동 청산 고려</b>
+                """
+                send_telegram(message)
+                del active_positions[symbol]
+        time.sleep(60)
+
 def send_telegram(text, chat_id=None):
     targets = USER_IDS if chat_id is None else [chat_id]
     for uid in targets:
@@ -363,17 +405,19 @@ def telegram_webhook():
 
 
 if __name__ == '__main__':
-    # Flask 서버 실행 (데몬 스레드 아님, blocking 되지 않도록 lambda)
+    # Flask 서버 실행
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
 
-    # 기술 분석 루프 실행 (데몬)
+    # 기술 분석 루프 실행
     Thread(target=analysis_loop, daemon=True).start()
 
-    # 경제 일정 스케줄러 실행 (데몬)
+    # 경제 일정 루프 실행
     Thread(target=start_economic_schedule, daemon=True).start()
 
-    # 메인 스레드는 대기 (영원히)
+    # ✅ 포지션 보유시간 추적 루프 실행
+    Thread(target=position_monitor_loop, daemon=True).start()
+
+    # 메인 스레드는 대기
     while True:
         time.sleep(60)
-
 
