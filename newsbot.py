@@ -177,28 +177,28 @@ def calculate_weighted_score(last, prev, df, explain):
 # format_message, analyze_symbol, analysis_loop, Flask routes 등은 그대로 유지됩니다.
 
 def analyze_multi_timeframe(symbol):
-    dfs = {}
-    for tf in ['1m', '5m', '15m']:
-        df = fetch_ohlcv(symbol, tf, 150)
-        if df is None or df.empty:
-            return None, None, None
-        df = calculate_indicators(df)
-        dfs[tf] = df
-
+    timeframes = [('1m', 0.5), ('5m', 1.0), ('15m', 1.5)]
     total_score = 0
-    all_explain = []
-    for tf, df in dfs.items():
+    total_weight = 0
+    final_explain = []
+    price_now = None
+
+    for interval, weight in timeframes:
+        df = fetch_ohlcv(symbol, interval)
+        if df is None or len(df) < 30:
+            continue
+        df = calculate_indicators(df)
         last = df.iloc[-1]
         prev = df.iloc[-2]
         explain = []
         score = calculate_weighted_score(last, prev, df, explain)
-        total_score += score
-        all_explain.extend(explain)
+        total_score += score * weight
+        total_weight += weight
+        if interval == '15m':
+            final_explain = explain
+            price_now = last['close']
 
-    score = round(total_score / len(dfs), 2)
-    price_now = dfs['15m']['close'].iloc[-1]
-
-    # 📌 1시간봉 추세 필터 (EMA 정배열이면 점수 +1.0)
+    # 1시간봉 추세 필터 추가
     df_1m_long = fetch_ohlcv(symbol, '1m', limit=720)
     if df_1m_long is not None and len(df_1m_long) >= 60:
         df_1m_long.index = pd.date_range(end=pd.Timestamp.now(), periods=len(df_1m_long), freq='1min')
@@ -211,38 +211,15 @@ def analyze_multi_timeframe(symbol):
             last = df_1h.iloc[-1]
             if all(col in last and not pd.isna(last[col]) for col in ['ema_20', 'ema_50', 'ema_200']):
                 if last['ema_20'] > last['ema_50'] > last['ema_200']:
-                    score += 1.0
-                    all_explain.append('🕐 1시간봉 추세: EMA 정배열 → 상승 추세 강화')
+                    total_score += 1.0 * 2.0
+                    total_weight += 2.0
+                    final_explain.append('🕐 1시간봉 추세: EMA 정배열 → 상승 추세 강화')
 
-    # 📌 점수 기반 추천 액션
-    if score >= 3.0:
-        action = "📈 강력 롱 (상승 확신 구간)"
-    elif score >= 2.0:
-        action = "🟢 롱 진입 고려 (긍정적 흐름)"
-    elif score >= 1.5:
-        action = "⚪ 관망 또는 약세 주의"
-    else:
-        action = "🔻 숏 진입 고려 (하락 신호)"
+    if total_weight == 0 or price_now is None:
+        return None, [], None
 
-    lower = round(price_now * 0.9975, 4)
-    upper = round(price_now * 1.0025, 4)
-
-    explain_text = "\n".join(all_explain)
-    message = f"""📊 {symbol} 기술 분석 (MEXC)
-🕒 {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-💰 현재가: ${price_now:,.4f}
-
-{explain_text}
-
-▶️ 종합 분석 점수: {score}/5
-⚪️ 추천 액션: {action}
-
-📌 참고 가격 범위
-⚪️ 추천 액션: {action.replace("📈 ","").replace("🟢 ","").replace("⚪ ","").replace("🔻 ","")}
-🎯 참고 가격: ${lower} ~ ${upper}"""
-
-    return score, message, price_now
-
+    final_score = round(total_score / total_weight, 2)
+    return final_score, final_explain, price_now
 
 def calculate_entry_range(df, price_now):
     recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
