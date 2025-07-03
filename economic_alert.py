@@ -24,7 +24,9 @@ allowed_countries = ["USD"]
 important_keywords = [
     "fomc", "rate", "interest", "inflation", "cpi", "ppi", "pce", "core",
     "fed", "dot", "non-farm", "nonfarm", "unemployment", "jobless", "adp",
-    "retail", "gdp", "powell", "treasury", "yellen", "lagarde", "ecb", "boe"
+    "retail", "gdp", "powell", "treasury", "yellen", "lagarde", "ecb", "boe",
+    "mortgage", "refinance", "crude", "oil", "inventories", "gasoline",
+    "eia", "refinery", "job cuts", "layoff", "jobs", "employment"
 ]
 
 # ✅ 한글 번역 맵
