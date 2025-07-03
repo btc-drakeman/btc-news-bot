@@ -74,102 +74,47 @@ def calculate_indicators(df):
         df['ema_slope'] = 0
     return df
 
-def calculate_weighted_score(last, prev, df, explain):
+def calculate_weighted_score_v2(last, prev, df):
     score = 0
     total_weight = 0
 
-    try:
-        if last['rsi'] > 70:
-            explain.append("⚖️ RSI: 과매수구간 ↘️ 하락 경고")
-        elif last['rsi'] < 30:
-            explain.append("⚖️ RSI: 과매도구간 ↗️ 반등 주의")
-            score += 0.3
-        else:
-            explain.append("⚖️ RSI: 중립")
-            score += 0.5
-        total_weight += 1.0
-    except:
-        explain.append("⚖️ RSI: 분석 불가")
+    # 📈 RSI: 상승 추세이면 가점
+    if last['rsi'] > 55 and last['rsi'] > prev['rsi']:
+        score += 1.0
+    total_weight += 1.0
 
-    try:
-        if 'macd' in last and 'signal' in last:
-            if last['macd'] > last['signal']:
-                explain.append("📊 MACD: 골든크로스 ↗️ 상승 전환 가능성")
-                score += 0.7
-            elif last['macd'] < last['signal']:
-                explain.append("📊 MACD: 데드크로스 ↘️ 하락 경고")
-            else:
-                explain.append("📊 MACD: 특별한 신호 없음")
-        else:
-            explain.append("📊 MACD: 데이터 부족")
-        total_weight += 1.2
-    except:
-        explain.append("📊 MACD: 분석 불가")
+    # 📊 MACD: 골든크로스 or 히스토그램 증가
+    macd_hist_last = last['macd'] - last['signal']
+    macd_hist_prev = prev['macd'] - prev['signal']
+    if prev['macd'] < prev['signal'] and last['macd'] > last['signal']:
+        score += 1.0
+    elif macd_hist_last > macd_hist_prev and macd_hist_last > 0:
+        score += 0.5
+    total_weight += 1.5
 
-    try:
-        if last['ema_20'] > last['ema_50']:
-            explain.append("📐 EMA: 단기 이평선이 장기 상단 ↗️ 상승 흐름")
+    # 📐 EMA: 단기 > 장기 + 벌어짐 증가
+    if last['ema_20'] > last['ema_50']:
+        slope_gap = (last['ema_20'] - last['ema_50']) - (prev['ema_20'] - prev['ema_50'])
+        if slope_gap > 0:
+            score += 1.2
+        else:
             score += 0.6
-        else:
-            explain.append("📐 EMA: 단기 이평선이 장기 하단 ↘️ 하락 흐름")
-        ema_20_slope = df['ema_20'].iloc[-1] - df['ema_20'].iloc[-6]
-        if ema_20_slope > 0:
-            explain.append("📐 EMA 기울기: 우상향 → 상승 강도 강화")
-            score += 0.3
-        else:
-            explain.append("📐 EMA 기울기: 우하향 → 약세 흐름")
-        total_weight += 1.2
-    except:
-        explain.append("📐 EMA: 분석 불가")
+    total_weight += 1.2
 
-    try:
-        if last['close'] > last['boll_upper']:
-            explain.append("📎 Bollinger: 상단 돌파 ↘️ 과열 우려")
-        elif last['close'] < last['boll_lower']:
-            explain.append("📎 Bollinger: 하단 이탈 ↗️ 저점 반등 기대")
-            score += 0.3
-        else:
-            explain.append("📎 Bollinger: 밴드 내 중립")
-            score += 0.5
-        total_weight += 0.8
-    except:
-        explain.append("📎 Bollinger: 분석 불가")
+    # 📎 Bollinger: 중심선 상단 돌파 + 밴드 확장
+    band_width_now = last['boll_upper'] - last['boll_lower']
+    band_width_prev = prev['boll_upper'] - prev['boll_lower']
+    if last['close'] > last['bollinger_mid'] and band_width_now > band_width_prev:
+        score += 0.8
+    total_weight += 0.8
 
+    # 📊 거래량: 평균 이상 증가
     try:
         if last['volume'] > df['volume'].rolling(20).mean().iloc[-1] * 1.1:
             score += 0.5
-            explain.append("📊 거래량: 평균 대비 증가 ↗ 수급 활발")
-        else:
-            explain.append("📊 거래량: 뚜렷한 변화 없음")
-        total_weight += 0.5
-    except:
-        explain.append("📊 거래량: 분석 불가")
-
-    try:
-        macd_cross = (
-            'macd' in last and 'signal' in last and
-            'macd' in prev and 'signal' in prev and
-            last['macd'] > last['signal'] and prev['macd'] < prev['signal']
-        )
-        macd_death = (
-            'macd' in last and 'signal' in last and
-            'macd' in prev and 'signal' in prev and
-            last['macd'] < last['signal'] and prev['macd'] > prev['signal']
-        )
-        volume_ma = df['volume'].rolling(20).mean().iloc[-1]
-        volume_increase = last['volume'] > volume_ma * 1.3
-        boll_range = last['boll_upper'] - last['boll_lower']
-        mid_band = (last['boll_upper'] + last['boll_lower']) / 2
-        bollinger_contracted = boll_range / mid_band < 0.06
-        bollinger_reject = (
-            prev['close'] > prev['boll_upper'] and last['close'] < last['boll_upper']
-        )
-        if score > 3 and macd_cross and volume_increase and bollinger_contracted:
-            explain.append("🚀 강한 롱 타이밍: MACD 골든크로스 + 거래량 증가 + 볼린저 수축")
-        if score < 2 and macd_death and volume_increase and bollinger_reject:
-            explain.append("🚨 강한 숏 타이밍: MACD 데드크로스 + 거래량 증가 + 볼린저 상단 반전")
     except:
         pass
+    total_weight += 0.5
 
     return round((score / total_weight) * 5, 2)
 
@@ -191,7 +136,7 @@ def analyze_multi_timeframe(symbol):
         last = df.iloc[-1]
         prev = df.iloc[-2]
         explain = []
-        score = calculate_weighted_score(last, prev, df, explain)
+        score = calculate_weighted_score_v2(last, prev, df)
         total_score += score * weight
         total_weight += weight
         if interval == '15m':
