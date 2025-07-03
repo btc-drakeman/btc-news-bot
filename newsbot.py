@@ -248,8 +248,6 @@ def telegram_webhook():
     data = request.get_json()
     print(f"📦 RAW 전체 데이터:\n{data}")  # 전체 구조 로그 출력
 
-    send_telegram(f"📥 webhook 도착! keys: {list(data.keys())}")
-
     if 'message' in data:
         print("✅ 'message' 키 있음 → 본 로직 진입")
         chat_id = data['message']['chat']['id']
