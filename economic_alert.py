@@ -22,8 +22,9 @@ def send_telegram(text):
 # ✅ 필터 기준
 allowed_countries = ["USD"]
 important_keywords = [
-    "interest", "rate", "fomc", "fed", "inflation", "cpi", "ppi",
-    "unemployment", "jobless", "non-farm", "retail", "gdp", "pce", "core"
+    "fomc", "rate", "interest", "inflation", "cpi", "ppi", "pce", "core",
+    "fed", "dot", "non-farm", "nonfarm", "unemployment", "jobless", "adp",
+    "retail", "gdp", "powell", "treasury", "yellen", "lagarde", "ecb", "boe"
 ]
 
 # ✅ 한글 번역 맵
