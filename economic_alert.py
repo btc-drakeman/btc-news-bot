@@ -80,7 +80,7 @@ def fetch_investing_schedule():
                 if not timestamp:
                     continue
 
-                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+                dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S") + timedelta(hours=4)
                 print(f"📅 parsed datetime: {dt}, now: {now} | 월 비교: {dt.month} vs {now.month}")
 
                 if dt.month != now.month:
