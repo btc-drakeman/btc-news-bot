@@ -126,6 +126,7 @@ def analyze_multi_timeframe(symbol):
     total_score = 0
     total_weight = 0
     final_explain = []
+    last_explain = []
     price_now = None
 
     for interval, weight in timeframes:
@@ -139,11 +140,18 @@ def analyze_multi_timeframe(symbol):
         score = calculate_weighted_score_v2(last, prev, df)
         total_score += score * weight
         total_weight += weight
+        last_explain = explain  # 항상 저장
         if interval == '15m':
             final_explain = explain
             price_now = last['close']
 
-    # 1시간봉 추세 필터 추가
+    # 🔁 fallback: 15m 설명이 없으면 가장 마지막 성공 explain 사용
+    if not final_explain:
+        final_explain = last_explain
+        if df is not None:
+            price_now = df.iloc[-1]['close']
+
+    # 1시간봉 추세 필터는 그대로 유지
     df_1m_long = fetch_ohlcv(symbol, '1m', limit=720)
     if df_1m_long is not None and len(df_1m_long) >= 60:
         df_1m_long.index = pd.date_range(end=pd.Timestamp.now(), periods=len(df_1m_long), freq='1min')
@@ -165,6 +173,7 @@ def analyze_multi_timeframe(symbol):
 
     final_score = round(total_score / total_weight, 2)
     return final_score, final_explain, price_now
+
 
 def calculate_entry_range(df, price_now):
     recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
