@@ -246,7 +246,7 @@ def home():
 def telegram_webhook():
     print("🟢 텔레그램 요청 수신됨")
     data = request.get_json()
-    print(f"📩 전체 수신 데이터: {data}")
+    print(f"📦 RAW 전체 데이터:\n{data}")
 
     if 'message' in data:
         print("✅ message 키 존재")
