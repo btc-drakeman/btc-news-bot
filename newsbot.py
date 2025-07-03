@@ -192,25 +192,33 @@ def format_message(symbol, price_now, score, explain, direction, entry_low, entr
         "관망": "⚪ 추천 액션: 관망 (진입 자제)"
     }[direction]
 
+    # 지표 설명 분리
+    indicators = "\n".join([line for line in explain if not line.startswith("▶️")])
+    score_line = f"▶️ 종합 분석 점수: {score}/5"
+
     msg = f"""
 📊 {symbol.upper()} 기술 분석 (MEXC)
 🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
 💰 현재가: ${price_now:,.4f}
 
-{action_line}
-▶️ 종합 분석 점수: {score}/5
+{indicators}
 
-""" + '\n'.join(explain)
+{score_line}
+"""
 
     if direction != "관망":
-        msg += f"""\n\n📌 진입 전략 제안
+        msg += f"""\n📌 진입 전략 제안
+{action_line}
 🎯 진입 권장가: ${entry_low:,.4f} ~ ${entry_high:,.4f}
 🛑 손절가: ${stop_loss:,.4f}
 🟢 익절가: ${take_profit:,.4f}"""
     else:
-        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.4f} ~ ${entry_high:,.4f}"
+        msg += f"""\n📌 참고 가격 범위
+{action_line}
+🎯 참고 가격: ${entry_low:,.4f} ~ ${entry_high:,.4f}"""
 
     return msg
+
 
 def analyze_symbol(symbol, leverage=None):
     score, explain, price_now = analyze_multi_timeframe(symbol)
