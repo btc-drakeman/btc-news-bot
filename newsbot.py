@@ -74,6 +74,60 @@ def calculate_indicators(df):
         df['ema_slope'] = 0
     return df
 
+def check_santiment_onchain(symbol):
+    import requests
+    from datetime import datetime, timedelta
+
+    slug_map = {
+        'BTCUSDT': 'bitcoin',
+        'ETHUSDT': 'ethereum',
+        'SOLUSDT': 'solana',
+        'XRPUSDT': 'ripple',
+    }
+    slug = slug_map.get(symbol.upper())
+    if not slug:
+        return []
+
+    api_key = "yhjrxcwdpyejnqc6_iisrdp5dnwy3zwnv"
+    url = "https://api.santiment.net/graphql"
+    headers = {
+        "Authorization": f"Apikey {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    now = datetime.utcnow()
+    hour_ago = now - timedelta(hours=1)
+
+    query = {
+        "query": """
+        {
+          exchange_inflow(
+            slug: "%s"
+            from: "%s"
+            to: "%s"
+            interval: "1h"
+          ) {
+            datetime
+            exchange_inflow
+          }
+        }
+        """ % (slug, hour_ago.isoformat() + "Z", now.isoformat() + "Z")
+    }
+
+    try:
+        res = requests.post(url, headers=headers, json=query, timeout=10)
+        data = res.json()
+        values = data['data']['exchange_inflow']
+        if not values:
+            return []
+        inflow = values[-1]['exchange_inflow']
+        if inflow > 1000:
+            return [f"🐋 온체인 경고: 최근 1시간 동안 {slug} {inflow:.0f}개 거래소 유입 → 매도 압력 우려"]
+    except Exception as e:
+        print(f"❌ Santiment API 오류: {e}")
+    return []
+
+
 def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
@@ -304,6 +358,11 @@ def analyze_symbol(symbol, leverage=None):
     score, explain, price_now = analyze_multi_timeframe(symbol)
     if score is None:
         return None
+
+    # ✅ 온체인 경고 추가
+    onchain_warnings = check_santiment_onchain(symbol)
+    for r in onchain_warnings:
+        explain.append(f"⚠️ 온체인 기반: {r}")
 
     # 1. 초기 방향 결정 (점수 기반)
     if score >= 3.5:
