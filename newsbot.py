@@ -263,29 +263,45 @@ def format_message(symbol, price_now, score, explain, direction, entry_low, entr
 
     return msg
 
-
 def analyze_symbol(symbol, leverage=None):
     score, explain, price_now = analyze_multi_timeframe(symbol)
     if score is None:
         return None
 
+    # 1. 초기 방향 결정 (점수 기반)
     if score >= 3.5:
         direction = "롱 (Long)"
     elif score <= 2.0:
         direction = "숏 (Short)"
     else:
         direction = "관망"
+
+    # 2. 롱 오판 방지
+    if direction == "롱 (Long)":
+        if not any(kw in line for kw in ["상승", "우상향", "골든크로스"] for line in explain):
+            direction = "관망"
+            explain.append("⚠️ 점수는 높지만 상승 시그널 부족 → 관망 전환")
+
+    # 3. 숏 오판 방지
+    if direction == "숏 (Short)":
+        if not any(kw in line for kw in ["하락", "우하향", "데드크로스"] for line in explain):
+            direction = "관망"
+            explain.append("⚠️ 점수는 낮지만 하락 시그널 부족 → 관망 전환")
+
+    # 4. 외부 이벤트 기반 조정
     now_kst = datetime.utcnow() + timedelta(hours=9)
     direction, reasons = adjust_direction_based_on_event(symbol, direction, now_kst)
     for r in reasons:
         explain.append(f"⚠️ 외부 이벤트 반영: {r}")
 
-    df = fetch_ohlcv(symbol)  # 1분봉으로 entry range 계산용
+    # 5. 진입가 계산용 1분봉 데이터
+    df = fetch_ohlcv(symbol)
     if df is None:
         return None
     df = calculate_indicators(df)
     entry_low, entry_high = calculate_entry_range(df, price_now)
 
+    # 6. 손절가 / 익절가 설정
     if direction == "롱 (Long)":
         stop_rate = get_safe_stop_rate(direction, leverage, 0.02)
         stop_loss = price_now * (1 - stop_rate)
@@ -298,6 +314,7 @@ def analyze_symbol(symbol, leverage=None):
         stop_loss = take_profit = None
 
     return format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit)
+
 
 def analysis_loop():
     while True:
