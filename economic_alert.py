@@ -149,21 +149,19 @@ from config import USER_IDS
 from economic_alert import all_schedules  # 캐시 일정 리스트
 
 def format_monthly_schedule_message():
-    """
-    /event 명령어에서 사용하는 메시지 생성
-    ✅ 캐시된 일정(all_schedules) 기준으로 3일 이내 데이터만 출력
-    """
     print("📤 /event 명령 처리 시작됨 (캐시 기반)")
     print(f"📦 현재 all_schedules 길이: {len(all_schedules)}")
 
     for e in all_schedules:
         print(f"🧾 {e['datetime']} - {e['title']}")
 
-    now = datetime.utcnow()
+    # ✅ UTC 기준이 아니라 KST 기준으로 변환해서 비교
+    now = datetime.utcnow() + timedelta(hours=9)
     near_future = now + timedelta(days=3)
 
     filtered = [
-        e for e in all_schedules if now <= e['datetime'] <= near_future
+        e for e in all_schedules
+        if now <= e['datetime'] + timedelta(hours=9) <= near_future
     ]
 
     if not filtered:
