@@ -99,34 +99,42 @@ def check_santiment_onchain(symbol):
     hour_ago = now - timedelta(hours=1)
 
     query = {
-        "query": """
-        {
-          exchange_inflow(
-            slug: "%s"
-            from: "%s"
-            to: "%s"
+        "query": f"""
+        {{
+          exchangeInflow(
+            slug: "{slug}"
+            from: "{hour_ago.isoformat()}Z"
+            to: "{now.isoformat()}Z"
             interval: "1h"
-          ) {
+          ) {{
             datetime
-            exchange_inflow
-          }
-        }
-        """ % (slug, hour_ago.isoformat() + "Z", now.isoformat() + "Z")
+            exchangeInflow
+          }}
+        }}
+        """
     }
 
     try:
         res = requests.post(url, headers=headers, json=query, timeout=10)
         data = res.json()
-        values = data['data']['exchange_inflow']
+        print(f"📦 Santiment 응답: {data}")  # ← 디버깅 출력
+
+        if "data" not in data or "exchangeInflow" not in data["data"]:
+            print(f"❌ Santiment 응답 오류: {data}")
+            return []
+
+        values = data["data"]["exchangeInflow"]
         if not values:
             return []
-        inflow = values[-1]['exchange_inflow']
+
+        inflow = values[-1]["exchangeInflow"]
         if inflow > 1000:
             return [f"🐋 온체인 경고: 최근 1시간 동안 {slug} {inflow:.0f}개 거래소 유입 → 매도 압력 우려"]
+
     except Exception as e:
         print(f"❌ Santiment API 오류: {e}")
-    return []
 
+    return []
 
 def calculate_weighted_score(last, prev, df, explain):
     score = 0
