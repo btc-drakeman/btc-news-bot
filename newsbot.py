@@ -1,4 +1,3 @@
-
 import requests
 import pandas as pd
 import time
@@ -10,7 +9,6 @@ from config import BOT_TOKEN, USER_IDS, API_URL
 from economic_alert import start_economic_schedule
 from event_risk import adjust_direction_based_on_event, handle_event_command
 
-# 텔레그램 설정
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
@@ -68,15 +66,12 @@ def calculate_indicators(df):
     df['ema_200'] = df['close'].ewm(span=200).mean()
     df['bollinger_mid'] = df['close'].rolling(window=20).mean()
     df['bollinger_std'] = df['close'].rolling(window=20).std()
-    df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
-    df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
-
-    # ✅ EMA 기울기 계산 추가 (최근 5분 변화량 기반)
+    df['boll_upper'] = df['bollinger_mid'] + 2 * df['bollinger_std']
+    df['boll_lower'] = df['bollinger_mid'] - 2 * df['bollinger_std']
     if len(df) >= 6:
         df['ema_slope'] = (df['ema_20'] - df['ema_20'].shift(5)) / 5
     else:
         df['ema_slope'] = 0
-
     return df
 
 def calculate_weighted_score(last, prev, df, explain):
@@ -97,11 +92,11 @@ def calculate_weighted_score(last, prev, df, explain):
         explain.append("⚖️ RSI: 분석 불가")
 
     try:
-        if 'macd' in last and 'macd_signal' in last:
-            if last['macd'] > last['macd_signal']:
+        if 'macd' in last and 'signal' in last:
+            if last['macd'] > last['signal']:
                 explain.append("📊 MACD: 골든크로스 ↗️ 상승 전환 가능성")
                 score += 0.7
-            elif last['macd'] < last['macd_signal']:
+            elif last['macd'] < last['signal']:
                 explain.append("📊 MACD: 데드크로스 ↘️ 하락 경고")
             else:
                 explain.append("📊 MACD: 특별한 신호 없음")
@@ -117,8 +112,6 @@ def calculate_weighted_score(last, prev, df, explain):
             score += 0.6
         else:
             explain.append("📐 EMA: 단기 이평선이 장기 하단 ↘️ 하락 흐름")
-
-        # 이평선 기울기
         ema_20_slope = df['ema_20'].iloc[-1] - df['ema_20'].iloc[-6]
         if ema_20_slope > 0:
             explain.append("📐 EMA 기울기: 우상향 → 상승 강도 강화")
@@ -152,17 +145,16 @@ def calculate_weighted_score(last, prev, df, explain):
     except:
         explain.append("📊 거래량: 분석 불가")
 
-    # ▶ 강한 진입 타이밍 판단 (방향 없이 점수 기반)
     try:
         macd_cross = (
-            'macd' in last and 'macd_signal' in last and
-            'macd' in prev and 'macd_signal' in prev and
-            last['macd'] > last['macd_signal'] and prev['macd'] < prev['macd_signal']
+            'macd' in last and 'signal' in last and
+            'macd' in prev and 'signal' in prev and
+            last['macd'] > last['signal'] and prev['macd'] < prev['signal']
         )
         macd_death = (
-            'macd' in last and 'macd_signal' in last and
-            'macd' in prev and 'macd_signal' in prev and
-            last['macd'] < last['macd_signal'] and prev['macd'] > prev['macd_signal']
+            'macd' in last and 'signal' in last and
+            'macd' in prev and 'signal' in prev and
+            last['macd'] < last['signal'] and prev['macd'] > prev['signal']
         )
         volume_ma = df['volume'].rolling(20).mean().iloc[-1]
         volume_increase = last['volume'] > volume_ma * 1.3
@@ -170,21 +162,20 @@ def calculate_weighted_score(last, prev, df, explain):
         mid_band = (last['boll_upper'] + last['boll_lower']) / 2
         bollinger_contracted = boll_range / mid_band < 0.06
         bollinger_reject = (
-            'boll_upper' in last and 'boll_upper' in prev and
-            'close' in last and 'close' in prev and
             prev['close'] > prev['boll_upper'] and last['close'] < last['boll_upper']
         )
-
         if score > 3 and macd_cross and volume_increase and bollinger_contracted:
             explain.append("🚀 강한 롱 타이밍: MACD 골든크로스 + 거래량 증가 + 볼린저 수축")
-
         if score < 2 and macd_death and volume_increase and bollinger_reject:
             explain.append("🚨 강한 숏 타이밍: MACD 데드크로스 + 거래량 증가 + 볼린저 상단 반전")
-
     except:
         pass
 
     return round((score / total_weight) * 5, 2)
+
+# 나머지 analyze_multi_timeframe, calculate_entry_range, get_safe_stop_rate,
+# format_message, analyze_symbol, analysis_loop, Flask routes 등은 그대로 유지됩니다.
+
 
 def analyze_multi_timeframe(symbol):
     timeframes = [('1m', 0.5), ('5m', 1.0), ('15m', 1.5)]
