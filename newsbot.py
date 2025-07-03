@@ -144,7 +144,7 @@ def analyze_multi_timeframe(symbol):
             price_now = last['close']
 
     # 1시간봉 추세 필터 추가 (1m 데이터 720개 사용)
- def analyze_multi_timeframe(symbol):
+def analyze_multi_timeframe(symbol):
     timeframes = [('1m', 0.5), ('5m', 1.0), ('15m', 1.5)]
     total_score = 0
     total_weight = 0
@@ -166,7 +166,7 @@ def analyze_multi_timeframe(symbol):
             final_explain = explain
             price_now = last['close']
 
-    # ✅ for 루프 바깥!
+    # 1시간봉 추세 필터 추가
     df_1m_long = fetch_ohlcv(symbol, '1m', limit=720)
     if df_1m_long is not None and len(df_1m_long) >= 60:
         df_1m_long.index = pd.date_range(end=pd.Timestamp.now(), periods=len(df_1m_long), freq='1min')
@@ -189,11 +189,6 @@ def analyze_multi_timeframe(symbol):
     final_score = round(total_score / total_weight, 2)
     return final_score, final_explain, price_now
 
-    if total_weight == 0 or price_now is None:
-        return None, None, None
-
-    final_score = round(total_score / total_weight, 2)
-    return final_score, final_explain, price_now
 
 def calculate_entry_range(df, price_now):
     recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
