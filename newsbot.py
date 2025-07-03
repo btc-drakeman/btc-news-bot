@@ -65,10 +65,18 @@ def calculate_indicators(df):
     df['signal'] = df['macd'].ewm(span=9).mean()
     df['ema_20'] = df['close'].ewm(span=20).mean()
     df['ema_50'] = df['close'].ewm(span=50).mean()
+    df['ema_200'] = df['close'].ewm(span=200).mean()
     df['bollinger_mid'] = df['close'].rolling(window=20).mean()
     df['bollinger_std'] = df['close'].rolling(window=20).std()
     df['upper_band'] = df['bollinger_mid'] + 2 * df['bollinger_std']
     df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
+
+    # ✅ EMA 기울기 계산 추가 (최근 5분 변화량 기반)
+    if len(df) >= 6:
+        df['ema_slope'] = (df['ema_20'] - df['ema_20'].shift(5)) / 5
+    else:
+        df['ema_slope'] = 0
+
     return df
 
 def calculate_weighted_score(last, prev, df, explain):
@@ -77,9 +85,9 @@ def calculate_weighted_score(last, prev, df, explain):
 
     if last['rsi'] < 30:
         score += 1.0
-        explain.append("⚖️ RSI: 과매도권 ↗ 반등 가능성")
+        explain.append("⚖️ RSI: 과매도구간 ↗ 반등 가능성")
     elif last['rsi'] > 70:
-        explain.append("⚖️ RSI: 과매수권 ↘ 하락 경고")
+        explain.append("⚖️ RSI: 과매수구간 ↘ 하락 경고")
     else:
         explain.append("⚖️ RSI: 중립")
     total_weight += 1.0
@@ -99,6 +107,17 @@ def calculate_weighted_score(last, prev, df, explain):
     else:
         explain.append("📐 EMA: 단기 이평선이 장기 하단 ↘ 하락 흐름")
     total_weight += 1.2
+
+    # ✅ EMA 기울기 반영
+    if 'ema_slope' in last and not pd.isna(last['ema_slope']):
+        if last['ema_slope'] > 0:
+            score += 0.4
+            explain.append("📐 EMA 기울기: 우상향 → 상승 강도 강화")
+        elif last['ema_slope'] < 0:
+            explain.append("📐 EMA 기울기: 우하향 → 하락 압력")
+        else:
+            explain.append("📐 EMA 기울기: 거의 평탄 → 방향성 약함")
+    total_weight += 0.4
 
     if last['close'] < last['lower_band']:
         score += 0.8
