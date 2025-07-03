@@ -72,7 +72,7 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
 
-def fetch_ohlcv(symbol, interval='1m'):
+def fetch_ohlcv(symbol, interval='1m', limit=300):
     symbol_map = {
         'BTCUSDT': 'BTC_USDT',
         'ETHUSDT': 'ETH_USDT',
@@ -92,7 +92,7 @@ def fetch_ohlcv(symbol, interval='1m'):
     params = {
         "symbol": futures_symbol,
         "interval": interval_map.get(interval, 1),
-        "limit": 300
+        "limit": limit
     }
 
     try:
@@ -110,6 +110,7 @@ def fetch_ohlcv(symbol, interval='1m'):
     except Exception as e:
         print(f"❌ 선물 OHLCV 데이터 로드 실패 ({symbol}): {e}")
         return None
+
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
