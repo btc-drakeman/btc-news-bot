@@ -73,6 +73,8 @@ def send_telegram(text, chat_id=None):
             print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
 
 def fetch_ohlcv(symbol, interval='1m', limit=300):
+    import time
+
     symbol_map = {
         'BTCUSDT': 'BTC_USDT',
         'ETHUSDT': 'ETH_USDT',
@@ -95,22 +97,25 @@ def fetch_ohlcv(symbol, interval='1m', limit=300):
         "limit": limit
     }
 
-    try:
-        res = requests.get(url, params=params, timeout=10)
-        res.raise_for_status()
-        raw = res.json()
-        if raw.get("success") is not True:
-            print(f"⚠️ 선물 데이터 응답 실패: {raw}")
-            return None
-        data = raw["data"]
-        closes = [float(x[4]) for x in data]  # 종가
-        volumes = [float(x[5]) for x in data]  # 거래량
-        df = pd.DataFrame({"close": closes, "volume": volumes})
-        return df
-    except Exception as e:
-        print(f"❌ 선물 OHLCV 데이터 로드 실패 ({symbol}): {e}")
-        return None
+    for attempt in range(3):
+        try:
+            res = requests.get(url, params=params, timeout=15)
+            res.raise_for_status()
+            raw = res.json()
+            if raw.get("success") is not True:
+                print(f"⚠️ 선물 데이터 응답 실패: {raw}")
+                return None
+            data = raw["data"]
+            closes = [float(x[4]) for x in data]  # 종가
+            volumes = [float(x[5]) for x in data]  # 거래량
+            df = pd.DataFrame({"close": closes, "volume": volumes})
+            return df
+        except Exception as e:
+            print(f"⏳ 재시도 {attempt+1}/3 실패 ({symbol}): {e}")
+            time.sleep(1)
 
+    print(f"❌ 선물 OHLCV 데이터 최종 실패 ({symbol})")
+    return None
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
