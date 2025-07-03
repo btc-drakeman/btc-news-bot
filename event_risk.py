@@ -28,35 +28,8 @@ def adjust_direction_based_on_event(symbol, direction, now):
             return "관망", reasons
     return direction, []
 
-
-def format_monthly_schedule_message():
-    """
-    /event 명령어에서 사용하는 실시간 크롤링 기반 메시지 생성
-    """
-    print("📤 /event 명령 처리 시작됨")  # ✅ 확인용 로그
-
-    events = fetch_investing_schedule()  # ✅ 최신 Investing.com 일정 실시간 요청
-    now = datetime.utcnow()
-    near_future = now + timedelta(days=3)
-
-    # ✅ 3일 이내 일정만 필터링
-    filtered = [
-        e for e in events if now <= e['datetime'] <= near_future
-    ]
-
-    if not filtered:
-        print("⚠️ 일정이 0건입니다.")
-        return "📅 2~3일 내 예정된 주요 경제 일정이 없습니다."
-
-    print(f"📥 총 {len(filtered)}건의 일정 수집됨")  # ✅ 일정 수 표시
-
-    msg = "\n📅 <b>2~3일 내 주요 경제 일정</b>\n\n"
-    for e in filtered:
-        local_time = e['datetime'] + timedelta(hours=9)  # UTC → KST
-        msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
-    return msg
-
+from economic_alert import format_monthly_schedule_message
 
 def handle_event_command():
-    """ /event 명령어 요청 시 출력 메시지 반환 """
     return format_monthly_schedule_message()
+
