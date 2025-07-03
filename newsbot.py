@@ -138,6 +138,16 @@ def calculate_weighted_score(last, prev, df, explain):
         explain.append("📊 거래량: 분석 불가")
     total_weight += 0.5
 
+    # 🔍 진입 타이밍 강화: MACD 골든크로스 + 거래량 증가 + 볼린저 수축
+    macd_cross = last['macd'] > last['macd_signal'] and prev['macd'] < prev['macd_signal']
+    volume_increase = last['volume'] > last['volume_ma'] * 1.3
+    boll_range = last['boll_upper'] - last['boll_lower']
+    mid_band = (last['boll_upper'] + last['boll_lower']) / 2
+    bollinger_contracted = boll_range / mid_band < 0.06  # 수축 비율 기준 (조정 가능)
+
+    if macd_cross and volume_increase and bollinger_contracted:
+        explain.append("🚀 강한 진입 타이밍: MACD 골든크로스 + 거래량 증가 + 볼린저 수축")
+
     return round((score / total_weight) * 5, 2)
 
 def analyze_multi_timeframe(symbol):
