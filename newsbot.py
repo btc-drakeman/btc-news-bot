@@ -72,19 +72,43 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
 
-def fetch_ohlcv(symbol, interval='1m', limit=300):
-    url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
+def fetch_ohlcv(symbol, interval='1m'):
+    symbol_map = {
+        'BTCUSDT': 'BTC_USDT',
+        'ETHUSDT': 'ETH_USDT',
+        'SEIUSDT': 'SEI_USDT',
+        'XRPUSDT': 'XRP_USDT',
+        'SOLUSDT': 'SOL_USDT',
+        'ETHFIUSDT': 'ETHFI_USDT',
+        'VIRTUALUSDT': 'VIRTUAL_USDT'
+    }
+    futures_symbol = symbol_map.get(symbol.upper())
+    if not futures_symbol:
+        print(f"❌ 지원하지 않는 심볼: {symbol}")
+        return None
+
+    url = "https://contract.mexc.com/api/v1/contract/kline"
+    interval_map = {'1m': 1, '5m': 5, '15m': 15}
+    params = {
+        "symbol": futures_symbol,
+        "interval": interval_map.get(interval, 1),
+        "limit": 300
+    }
+
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
-        data = res.json()
-        closes = [float(x[4]) for x in data]
-        volumes = [float(x[5]) for x in data]
+        raw = res.json()
+        if raw.get("success") is not True:
+            print(f"⚠️ 선물 데이터 응답 실패: {raw}")
+            return None
+        data = raw["data"]
+        closes = [float(x[4]) for x in data]  # 종가
+        volumes = [float(x[5]) for x in data]  # 거래량
         df = pd.DataFrame({"close": closes, "volume": volumes})
         return df
     except Exception as e:
-        print(f"{symbol} ({interval}) 데이터 요청 실패: {e}")
+        print(f"❌ 선물 OHLCV 데이터 로드 실패 ({symbol}): {e}")
         return None
 
 def calculate_rsi(df, period=14):
@@ -380,13 +404,26 @@ def telegram_webhook():
         text_stripped = text.strip().lower()
         print(f"📏 정제된 텍스트: {repr(text_stripped)}")
 
-        if text_stripped == "/event":
-            print("🧭 /event 명령어 분기 진입")
-            event_msg = handle_event_command()
-            send_telegram(event_msg, chat_id=chat_id)
+        if text_stripped.startswith("/buy"):
+            print("🟢 /buy 명령어 분기 진입")
+            match = re.match(r"/buy\s+(\w+)", text_stripped)
+            if match:
+                symbol = match.group(1).upper()
+                if symbol not in SYMBOLS:
+                    send_telegram(f"⚠️ 지원되지 않는 심볼입니다: {symbol}", chat_id=chat_id)
+                else:
+                    df = fetch_ohlcv(symbol, limit=1)
+                    if df is None or df.empty:
+                        send_telegram(f"⚠️ 가격 데이터를 불러올 수 없습니다: {symbol}", chat_id=chat_id)
+                        return '', 200
+                    price_now = df['close'].iloc[-1]
+                    store_position(symbol, "(수동 진입)", price_now)
+                    send_telegram(f"✅ <b>{symbol}</b> 포지션 진입 기록됨\n🕒 지금부터 보유시간 추적을 시작합니다", chat_id=chat_id)
+            else:
+                send_telegram("❓ 사용법: /buy BTCUSDT", chat_id=chat_id)
 
         else:
-            print("❌ /event 아님 → 다른 명령 시도")
+            print("❌ /buy 아님 → 다른 명령 시도")
             match = re.match(r"/go (\w+)(?:\s+(\d+)x)?", text_stripped, re.IGNORECASE)
             if match:
                 symbol = match.group(1).upper()
