@@ -144,16 +144,33 @@ def get_this_month_schedule():
         if now <= e['datetime'] <= end
     ]
 
+from datetime import datetime, timedelta
+from config import USER_IDS
+from economic_alert import all_schedules  # 캐시 일정 리스트
+
 def format_monthly_schedule_message():
-    print("📤 /event 명령 처리 시작됨")
-    events = fetch_investing_schedule()
-    if not events:
+    """
+    /event 명령어에서 사용하는 메시지 생성
+    ✅ 캐시된 일정(all_schedules) 기준으로 3일 이내 데이터만 출력
+    """
+    print("📤 /event 명령 처리 시작됨 (캐시 기반)")
+    now = datetime.utcnow()
+    near_future = now + timedelta(days=3)
+
+    filtered = [
+        e for e in all_schedules if now <= e['datetime'] <= near_future
+    ]
+
+    if not filtered:
+        print("⚠️ 캐시 기반 일정이 0건입니다.")
         return "📅 2~3일 내 예정된 주요 경제 일정이 없습니다."
 
+    print(f"📥 캐시 기반으로 {len(filtered)}건의 일정 출력 예정")
     msg = "\n📅 <b>2~3일 내 주요 경제 일정</b>\n\n"
-    for e in events:
+    for e in filtered:
         local_time = e['datetime'] + timedelta(hours=9)
         msg += f"🗓 {local_time.strftime('%m월 %d일 (%a) %H:%M')} - {e['title']}\n"
+
     return msg
 
 def handle_event_command():
