@@ -89,45 +89,27 @@ def check_santiment_onchain(symbol):
         return []
 
     api_key = "yhjrxcwdpyejnqc6_iisrdp5dnwy3zwnv"
-    url = "https://api.santiment.net/graphql"
-    headers = {
-        "Authorization": f"Apikey {api_key}",
-        "Content-Type": "application/json"
-    }
+    url = f"https://api.santiment.net/v2/metrics/{slug}/exchange_inflow"
 
     now = datetime.utcnow()
     hour_ago = now - timedelta(hours=1)
 
-    query = {
-        "query": f"""
-        {{
-          exchangeInflow(
-            slug: "{slug}"
-            from: "{hour_ago.isoformat()}Z"
-            to: "{now.isoformat()}Z"
-            interval: "1h"
-          ) {{
-            datetime
-            exchangeInflow
-          }}
-        }}
-        """
+    params = {
+        "from": hour_ago.isoformat() + "Z",
+        "to": now.isoformat() + "Z",
+        "interval": "1h",
+        "api_key": api_key
     }
 
     try:
-        res = requests.post(url, headers=headers, json=query, timeout=10)
+        res = requests.get(url, params=params, timeout=10)
         data = res.json()
-        print(f"📦 Santiment 응답: {data}")  # ← 디버깅 출력
+        print(f"📦 Santiment 응답: {data}")
 
-        if "data" not in data or "exchangeInflow" not in data["data"]:
-            print(f"❌ Santiment 응답 오류: {data}")
+        if not data or 'data' not in data or not data['data']:
             return []
 
-        values = data["data"]["exchangeInflow"]
-        if not values:
-            return []
-
-        inflow = values[-1]["exchangeInflow"]
+        inflow = data['data'][-1]['value']
         if inflow > 1000:
             return [f"🐋 온체인 경고: 최근 1시간 동안 {slug} {inflow:.0f}개 거래소 유입 → 매도 압력 우려"]
 
