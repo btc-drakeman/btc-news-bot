@@ -276,11 +276,16 @@ def analyze_symbol(symbol, leverage=None):
     else:
         direction = "관망"
 
-    # 2. 롱 오판 방지
+     # 2. 롱 오판 방지 (지표 2개 이상일 때만 롱 허용)
     if direction == "롱 (Long)":
-        if not any(kw in line for kw in ["상승", "우상향", "골든크로스"] for line in explain):
+        bullish_signals = 0
+        for line in explain:
+            if any(kw in line for kw in ["우상향", "골든크로스", "상승 흐름", "상승 추세"]):
+                bullish_signals += 1
+        if bullish_signals < 2:
             direction = "관망"
-            explain.append("⚠️ 점수는 높지만 상승 시그널 부족 → 관망 전환")
+            explain.append("⚠️ 상승 시그널이 1개 이하 → 롱 진입 보류")
+
 
      # 3. 숏 오판 방지 (RSI는 제외)
     if direction == "숏 (Short)":
