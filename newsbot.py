@@ -246,10 +246,12 @@ def home():
 def telegram_webhook():
     print("🟢 텔레그램 요청 수신됨")
     data = request.get_json()
-    print(f"📦 RAW 전체 데이터:\n{data}")
+    print(f"📦 RAW 전체 데이터:\n{data}")  # 전체 구조 로그 출력
+
+    send_telegram(f"📥 webhook 도착! keys: {list(data.keys())}")
 
     if 'message' in data:
-        print("✅ message 키 존재")
+        print("✅ 'message' 키 있음 → 본 로직 진입")
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '')
         print(f"💬 입력된 텍스트(raw): {repr(text)}")  # ← 공백/줄바꿈 포함 확인용
