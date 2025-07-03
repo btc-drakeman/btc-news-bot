@@ -107,10 +107,6 @@ def fetch_investing_schedule():
                     print("🚫 레벨 3 아님 → 제외됨")
                     continue
 
-                if not any(k in title.lower() for k in important_keywords):
-                    print("🚫 중요 키워드 없음 → 제외됨")
-                    continue
-
                 translated = translate_title(title)
                 result.append({
                     "datetime": dt,
