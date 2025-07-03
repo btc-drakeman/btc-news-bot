@@ -155,13 +155,14 @@ def format_monthly_schedule_message():
     for e in all_schedules:
         print(f"🧾 {e['datetime']} - {e['title']}")
 
-    # ✅ UTC 기준이 아니라 KST 기준으로 변환해서 비교
-    now = datetime.utcnow() + timedelta(hours=9)
-    near_future = now + timedelta(days=3)
+    # ✅ 기준 시간도 UTC + 9로 맞춤
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    near_future = now_kst + timedelta(days=3)
 
+    # ✅ 일정도 UTC + 9로 변환해서 비교
     filtered = [
         e for e in all_schedules
-        if now <= e['datetime'] + timedelta(hours=9) <= near_future
+        if now_kst <= e['datetime'] + timedelta(hours=9) <= near_future
     ]
 
     if not filtered:
