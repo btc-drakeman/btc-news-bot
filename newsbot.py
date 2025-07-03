@@ -32,9 +32,9 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
 
-def fetch_ohlcv(symbol, interval='1m'):
+def fetch_ohlcv(symbol, interval='1m', limit=300):
     url = f"https://api.mexc.com/api/v3/klines"
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": 300}
+    params = {"symbol": symbol.upper(), "interval": interval, "limit": limit}
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
