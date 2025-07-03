@@ -64,17 +64,24 @@ def fetch_investing_schedule():
         soup = BeautifulSoup(response.text, "html.parser")
 
         rows = soup.select("tr.js-event-item")
+        print(f"📋 크롤링된 이벤트 row 수: {len(rows)}")
+
         now = datetime.utcnow()
         result = []
 
         for row in rows:
             try:
                 timestamp = row.get("data-event-datetime")
+                print(f"🧾 timestamp: {timestamp}")
+
                 if not timestamp:
                     continue
 
                 dt = datetime.strptime(timestamp, "%Y/%m/%d %H:%M:%S")
+                print(f"📅 parsed datetime: {dt}, now: {now} | 월 비교: {dt.month} vs {now.month}")
+
                 if dt.month != now.month:
+                    print("⛔ 다른 달의 이벤트 → 제외됨")
                     continue
 
                 title_el = row.select_one(".event")
@@ -82,18 +89,23 @@ def fetch_investing_schedule():
                 impact_el = row.select_one(".sentiment")
 
                 if not title_el or not country_el or not impact_el:
+                    print("⛔ 요소 누락 → 제외됨")
                     continue
 
                 title = title_el.text.strip()
                 country = country_el.text.strip()
                 impact_level = len(impact_el.select("i"))
+                print(f"🏳️ 국가: {country}, 중요도: {impact_level}, 제목: {title}")
 
                 if country not in allowed_countries:
+                    print("🚫 국가 필터 제외됨")
                     continue
                 if impact_level != 3:
+                    print("🚫 레벨 3 아님 → 제외됨")
                     continue
 
                 if not any(k in title.lower() for k in important_keywords):
+                    print("🚫 중요 키워드 없음 → 제외됨")
                     continue
 
                 translated = translate_title(title)
