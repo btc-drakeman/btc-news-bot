@@ -117,6 +117,17 @@ def fetch_ohlcv(symbol, interval='1m', limit=300):
     print(f"❌ 선물 OHLCV 데이터 최종 실패 ({symbol})")
     return None
 
+def analysis_loop():
+    while True:
+        for symbol in SYMBOLS:
+            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
+            result = analyze_symbol(symbol)
+            if result:
+                send_telegram(result)
+            time.sleep(5)  # 🔁 각 심볼 간 5초 대기
+
+        time.sleep(900)  # ⏱ 전체 루프 15분 간격으로 실행
+
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0.0)
@@ -379,17 +390,6 @@ def analyze_symbol(symbol, leverage=None):
         stop_loss = take_profit = None
 
     return format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit)
-
-
-def analysis_loop():
-    while True:
-        for symbol in SYMBOLS:
-            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-            result = analyze_symbol(symbol)
-            if result:
-                send_telegram(result)
-            time.sleep(3)
-        time.sleep(600)
 
 @app.route('/')
 def home():
