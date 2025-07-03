@@ -282,11 +282,15 @@ def analyze_symbol(symbol, leverage=None):
             direction = "관망"
             explain.append("⚠️ 점수는 높지만 상승 시그널 부족 → 관망 전환")
 
-    # 3. 숏 오판 방지
+     # 3. 숏 오판 방지 (RSI는 제외)
     if direction == "숏 (Short)":
-        if not any(kw in line for kw in ["하락", "우하향", "데드크로스"] for line in explain):
+        bearish_signals = 0
+        for line in explain:
+            if any(kw in line for kw in ["우하향", "데드크로스"]):
+                bearish_signals += 1
+        if bearish_signals < 1:
             direction = "관망"
-            explain.append("⚠️ 점수는 낮지만 하락 시그널 부족 → 관망 전환")
+            explain.append("⚠️ RSI 외에 뚜렷한 하락 신호 없음 → 숏 진입 보류")
 
     # 4. 외부 이벤트 기반 조정
     now_kst = datetime.utcnow() + timedelta(hours=9)
