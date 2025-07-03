@@ -144,7 +144,7 @@ def analyze_multi_timeframe(symbol):
             price_now = last['close']
 
     # 1시간봉 추세 필터 추가 (1m 데이터 720개 사용)
-    df_1m_long = fetch_ohlcv(symbol, '1m', limit=720)
+      df_1m_long = fetch_ohlcv(symbol, '1m', limit=720)
     if df_1m_long is not None and len(df_1m_long) >= 60:
         df_1m_long.index = pd.date_range(end=pd.Timestamp.now(), periods=len(df_1m_long), freq='1min')
         df_1h = df_1m_long.resample('1H').agg({
@@ -154,10 +154,11 @@ def analyze_multi_timeframe(symbol):
         if len(df_1h) >= 5:
             df_1h = calculate_indicators(df_1h)
             last = df_1h.iloc[-1]
-            if last['ema_20'] > last['ema_50'] > last['ema_200']:
-                total_score += 1.0 * 2.0
-                total_weight += 2.0
-                final_explain.append('🕐 1시간봉 추세: EMA 정배열 → 상승 추세 강화')
+            if all(col in last and not pd.isna(last[col]) for col in ['ema_20', 'ema_50', 'ema_200']):
+                if last['ema_20'] > last['ema_50'] > last['ema_200']:
+                    total_score += 1.0 * 2.0
+                    total_weight += 2.0
+                    final_explain.append('🕐 1시간봉 추세: EMA 정배열 → 상승 추세 강화')
 
     if total_weight == 0 or price_now is None:
         return None, None, None
