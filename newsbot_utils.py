@@ -1,9 +1,7 @@
-# ✅ newsbot_utils.py (현물 분석 + 레버리지별 손익폭 안내)
 import requests
 import pandas as pd
 from datetime import datetime
 from config import API_URL, USER_IDS
-from newsbot_core import analyze_multi_timeframe, get_now_price
 
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']
 
@@ -20,29 +18,36 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"❌ 메시지 전송 실패 ({uid}): {e}")
 
+def get_now_price(symbol):
+    url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=15m&limit=1"
+    response = requests.get(url, timeout=10)
+    data = response.json()
+    return float(data[-1][4])  # 종가
+
 def analyze_symbol(symbol):
     print(f"📊 analyze_symbol() 호출됨: {symbol}")
     try:
-        score, explain, price_now = analyze_multi_timeframe(symbol)
+        now_price = get_now_price(symbol)
     except Exception as e:
-        print(f"❌ 분석 실패: {e}")
+        print(f"❌ 가격 조회 실패: {e}")
         return None
 
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    explain = "⚙️ (샘플 설명) 기술적 분석 결과를 기반으로 한 판단 내용입니다."  # 추후 수정 가능
+
     try:
-        price_now = float(price_now)
-        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         reference = f"""
-📊 <b>{symbol} 기술분석 요약</b>
-📅 분석 시각: <b>{now_str}</b>
-💰 현재가: <b>${price_now:,.4f}</b>
+📊 <b>{symbol} 기술분석 (현물 기준)</b>
+🕒 <b>{now}</b>
+💰 현재가: <b>${now_price:,.4f}</b>
 
 {explain}
 
-📉 <b>레버리지별 참고 손익폭</b>
-🔹 10x: ±<b>{(price_now * 0.01):.2f}</b> USD
-🔸 20x: ±<b>{(price_now * 0.005):.2f}</b> USD
-🔺 30x: ±<b>{(price_now * 0.0033):.2f}</b> USD
-🟥 50x: ±<b>{(price_now * 0.002):.2f}</b> USD
+🎯 <b>레버리지별 참고 손익폭</b>
+🔹 10x: ±{(now_price * 0.01):.2f} USD
+🔸 20x: ±{(now_price * 0.005):.2f} USD
+🔺 30x: ±{(now_price * 0.0033):.2f} USD
+🟥 50x: ±{(now_price * 0.002):.2f} USD
         """.strip()
         return reference
     except Exception as e:

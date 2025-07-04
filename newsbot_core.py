@@ -1,10 +1,6 @@
 import time
-import requests
-import pandas as pd
-from datetime import datetime
 from config import USER_IDS
-
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']
+from newsbot_utils import SYMBOLS, analyze_symbol, send_telegram
 
 def analysis_loop():
     while True:
