@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import time
+from config import MEXC_API_KEY
 from flask import Flask, request
 from threading import Thread
 from datetime import datetime, timedelta
@@ -67,26 +68,42 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"텔레그램 오류: {e}")
 
-def fetch_ohlcv(symbol, interval='1m'):
-    url = f"https://contract.mexc.com/api/v1/contract/kline/{symbol}"
-    params = {"interval": interval, "limit": 200}
+import requests
+import pandas as pd
+from config import MEXC_API_KEY
+
+def fetch_ohlcv(symbol, interval):
+    url = "https://api.mexc.com/api/v3/klines"
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": 300
+    }
+
+    headers = {
+        "X-MEXC-APIKEY": MEXC_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
     try:
-        for _ in range(3):
-            res = requests.get(url, params=params, timeout=15)
-            if res.status_code == 200:
-                data = res.json().get("data", [])
-                if not data:
-                    continue
-                closes = [float(x[4]) for x in data]
-                volumes = [float(x[5]) for x in data]
-                df = pd.DataFrame({"close": closes, "volume": volumes})
-                return df
-            else:
-                time.sleep(1)
-        raise Exception("재시도 실패")
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+        ])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        df = df.astype(float)
+        return df[['open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
         print(f"{symbol} ({interval}) MEXC 데이터 요청 실패: {e}")
         return None
+
 
 # 분석 로직과 지표 계산 함수 등은 newsbot_core.py에 위치한다고 가정
 if __name__ == '__main__':
