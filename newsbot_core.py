@@ -1,12 +1,11 @@
+# ✅ newsbot_core.py (수정 완료)
 import time
 from datetime import datetime
 import pandas as pd
-from newsbot import send_telegram
-from newsbot import fetch_ohlcv
-from newsbot import SYMBOLS
+from newsbot import send_telegram, fetch_ohlcv, SYMBOLS
+from event_risk import adjust_direction_based_on_event
 
 
-# === 기술 지표 계산 함수 ===
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.clip(lower=0)
@@ -69,7 +68,6 @@ def calculate_volume(df):
     else:
         return "중립"
 
-# === 점수 계산 ===
 def calculate_score(rsi, macd, ema, boll, volume):
     score = 0.0
     if "상승" in macd or "골든" in macd:
@@ -94,7 +92,6 @@ def action_recommendation(score):
     else:
         return "매도 또는 숏 포지션 고려"
 
-# === 심볼 분석 ===
 def analyze_symbol(symbol):
     print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
     df = fetch_ohlcv(symbol, '15m')
@@ -110,6 +107,10 @@ def analyze_symbol(symbol):
 
     score = calculate_score(rsi, macd, ema, boll, volume)
     recommendation = action_recommendation(score)
+
+    # ✅ 이벤트 리스크 반영
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    recommendation, reasons = adjust_direction_based_on_event(symbol, recommendation, now_kst)
 
     price_now = df['close'].iloc[-1]
     upper = df['close'].rolling(20).mean().iloc[-1] + 2 * df['close'].rolling(20).std().iloc[-1]
@@ -135,16 +136,17 @@ def analyze_symbol(symbol):
 🎯 익절가: ${take_profit:.2f}
 🛑 손절가: ${stop_loss:.2f} 
 """
+    if reasons:
+        result += "\n⚠️ 이벤트 리스크 감지됨: " + ", ".join(reasons)
+
     print(f"📢 분석 완료, 텔레그램 전송 시작 → {symbol}")
     send_telegram(result)
     print("✅ 텔레그램 전송 완료")
     return result
 
-# === 분석 루프 ===
 def analysis_loop():
     while True:
         for symbol in SYMBOLS:
             analyze_symbol(symbol)
             time.sleep(3)
         time.sleep(600)
-
