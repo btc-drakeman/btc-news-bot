@@ -89,6 +89,10 @@ def recommend_action(score):
 def analyze_symbol(symbol: str):
     print(f"🔍 분석 시작: {symbol}")
     data = fetch_ohlcv_all_timeframes(symbol)
+    print(f"✅ 데이터 keys: {list(data.keys())}")
+    for tf, df in data.items():
+         print(f"🕒 {tf}: {len(df)} rows")
+
     if not data or len(data['15m']) < 100:
         print(f"❌ 데이터 부족: {symbol}")
         return
@@ -132,8 +136,8 @@ def analyze_symbol(symbol: str):
 🛑 손절가: ${stop_loss:.4f}
 🟢 익절가: ${take_profit:.4f}
 """
-    print(f"📨 전송 메시지:\n{message}")
-    print("📤 텔레그램 메시지 전송 시도 중...")
+    print(f"📨 전송 메시지:\n{message}")  # 메시지 내용 출력
+    print("📤 텔레그램 메시지 전송 시도 중...")  # 전송 시도 확인 로그
     send_telegram(message)
-    print(f"✅ 완료 → {symbol}")
+    print(f"✅ 완료 → {symbol}")  # 마무리 로그
 
