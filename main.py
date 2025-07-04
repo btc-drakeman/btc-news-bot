@@ -6,6 +6,7 @@ from datetime import datetime
 from config import SYMBOLS
 from analyzer import analyze_symbol
 from notifier import send_telegram
+import time
 
 app = Flask(__name__)
 
@@ -16,12 +17,14 @@ def home():
 def analysis_loop():
     while True:
         for symbol in SYMBOLS:
-            print(f"ἰ0 루프 진입: {symbol}")
+            print(f"🌀 루프 진입: {symbol}")
             result = analyze_symbol(symbol)
             if result:
                 send_telegram(result)
             else:
-                send_telegram(f"⚠️ {symbol} 분석 실패 (데이터 부족 또는 계산 오류)")
+                print(f"⚠️ {symbol} 분석 실패 (데이터 부족)")
+        time.sleep(900)  # ← 여기! 15분마다 반복
+
 
 if __name__ == '__main__':
     print("🔍 분석 시작: BTCUSDT")
