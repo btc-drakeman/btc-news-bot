@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 from config import MEXC_API_KEY
 
-# MEXC 선물 OHLCV 가져오기 (interval: 1m, 5m, 15m, 1h)
+# MEXC 선물 OHLCV 가져오기
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
     url = "https://contract.mexc.com/api/v1/kline"
     params = {
@@ -19,10 +19,15 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         headers["ApiKey"] = MEXC_API_KEY
 
     try:
+        print(f"📡 MEXC 요청 → {symbol} @ {interval}")
+        print(f"📡 요청 URL: {url}, params: {params}")
         response = requests.get(url, params=params, headers=headers, timeout=10)
+        print(f"📡 응답: {response.status_code}, 내용: {response.text[:200]}")  # 응답 앞부분만 출력
+
         response.raise_for_status()
         data = response.json().get("data", [])
         if not data:
+            print(f"⚠️ 받은 데이터 없음: {symbol} ({interval})")
             return None
 
         df = pd.DataFrame(data)
