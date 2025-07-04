@@ -8,7 +8,7 @@ from config import MEXC_API_KEY
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
     url = "https://api.mexc.com/api/v3/klines"
     params = {
-        "symbol": symbol.lower(),   # 현물 API는 모두 소문자
+        "symbol": symbol.upper(),  
         "interval": interval,
         "limit": limit
     }
