@@ -1,11 +1,12 @@
-# newsbot.py
+# ✅ newsbot.py (최신 버전 — 현물 기준 분석 + 레버리지별 손익폭 안내)
 import time
 from flask import Flask
 from threading import Thread
 from datetime import datetime
 
 from config import BOT_TOKEN, USER_IDS, API_URL
-from newsbot_utils import send_telegram, SYMBOLS, analyze_symbol
+from newsbot_utils import send_telegram, SYMBOLS
+from newsbot_core import analyze_symbol
 
 app = Flask(__name__)
 
