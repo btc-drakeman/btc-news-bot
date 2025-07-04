@@ -1,4 +1,4 @@
-# ✅ newsbot_core.py (현물 symbol 포맷 보정 적용)
+# ✅ newsbot_core.py (디버그 추가 포함)
 import time
 from datetime import datetime, timedelta
 import pandas as pd
@@ -93,7 +93,7 @@ def action_recommendation(score):
         return "매도 또는 숏 포지션 고려"
 
 def analyze_symbol(symbol):
-    print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
+    print(f"📊 analyze_symbol() 호출됨: {symbol}")
     df = fetch_spot_ohlcv(symbol)
     if df is None or len(df) < 50:
         print(f"❌ 데이터 부족: {symbol}")

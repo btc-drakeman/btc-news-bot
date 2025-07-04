@@ -1,4 +1,4 @@
-# ✅ newsbot_utils.py (선물 심볼 포맷 안정화 적용)
+# ✅ newsbot_utils.py (디버그 추가 포함)
 import requests
 import pandas as pd
 from config import MEXC_API_KEY, BOT_TOKEN, USER_IDS, API_URL
@@ -30,6 +30,8 @@ def fetch_spot_ohlcv(symbol, interval='15m'):
         "interval": interval,
         "limit": 300
     }
+    print(f"📡 현물 요청: symbol = {symbol}, formatted = {spot_symbol}")
+    print(f"📡 요청 URL: {url}?symbol={spot_symbol}&interval={interval}")
     try:
         response = requests.get(url, params=params, timeout=10)
         raw = response.json()
@@ -47,10 +49,13 @@ def fetch_futures_price(symbol):
     futures_symbol = symbol.replace('_', '').upper()
     url = "https://contract.mexc.com/api/v1/kline"
     params = {"symbol": futures_symbol, "interval": "1m", "limit": 1}
+    print(f"📡 선물 요청: symbol = {symbol}, formatted = {futures_symbol}")
+    print(f"📡 요청 URL: {url}?symbol={futures_symbol}&interval=1m")
     try:
         response = requests.get(url, params=params, timeout=15)
         data = response.json().get("data", [])
         if not data:
+            print("⚠️ 응답은 왔지만 데이터가 비어 있음")
             return None
         close_price = float(data[-1][4])
         return close_price
