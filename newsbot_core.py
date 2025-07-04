@@ -138,7 +138,7 @@ def analyze_symbol(symbol):
 # === 분석 루프 ===
 def analysis_loop():
     while True:
-        for symbol in ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']:
+        for symbol in ['BTC_USDT', 'ETH_USDT', 'XRP_USDT', 'ETHFI_USDT']:
             analyze_symbol(symbol)
             time.sleep(3)
         time.sleep(600)

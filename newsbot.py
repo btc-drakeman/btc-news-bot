@@ -13,17 +13,17 @@ USER_IDS = ['7505401062', '7576776181']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
 # === 분석할 코인 ===
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']
+SYMBOLS = ['BTC_USDT', 'ETH_USDT', 'XRP_USDT', 'ETHFI_USDT']
 
 # === Flask 앱 생성 ===
 app = Flask(__name__)
 
 # === 최대 보유시간 (분) 설정 ===
 symbol_max_hold_time = {
-    "BTCUSDT": 30,
-    "ETHUSDT": 75,
-    "XRPUSDT": 120,
-    "ETHFIUSDT": 60,
+    "BTC_USDT": 30,
+    "ETH_USDT": 75,
+    "XRP_USDT": 120,
+    "ETHFI_USDT": 60,
 }
 
 # === 포지션 메모리 ===
@@ -73,35 +73,30 @@ import pandas as pd
 from config import MEXC_API_KEY
 
 def fetch_ohlcv(symbol, interval):
-    url = "https://api.mexc.com/api/v3/klines"
+    url = "https://contract.mexc.com/api/v1/kline"
     params = {
-        "symbol": symbol,
-        "interval": interval,
+        "symbol": symbol,      # 예: "BTC_USDT"
+        "interval": interval,  # 예: "1m", "5m", "15m"
         "limit": 300
     }
 
-    headers = {
-        "X-MEXC-APIKEY": MEXC_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
-        data = response.json()
+        raw = response.json().get("data", [])
 
-        df = pd.DataFrame(data, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
+        df = pd.DataFrame(raw)
+        if df.empty:
+            return None
+
+        df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
+        df.set_index("timestamp", inplace=True)
         df = df.astype(float)
-        return df[['open', 'high', 'low', 'close', 'volume']]
+        return df[["open", "high", "low", "close", "volume"]]
+
     except Exception as e:
-        print(f"{symbol} ({interval}) MEXC 데이터 요청 실패: {e}")
+        print(f"{symbol} ({interval}) MEXC 선물 데이터 요청 실패: {e}")
         return None
 
 
