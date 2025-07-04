@@ -94,7 +94,6 @@ def fetch_ohlcv(symbol, interval='1'):
         print(f"{symbol} ({interval}) 데이터 요청 실패: {e}")
         return None
 
-
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0.0)
