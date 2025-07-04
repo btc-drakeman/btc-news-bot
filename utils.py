@@ -38,8 +38,11 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         return df[["open", "high", "low", "close", "volume"]]
 
     except Exception as e:
-        print(f"❌ OHLCV 요청 실패 [{symbol} {interval}]: {e}")
-        return None
+          import traceback
+          print(f"❌ OHLCV 요청 실패 [{symbol} {interval}]: {e}")
+          traceback.print_exc()  # ✅ 전체 에러 스택 출력
+          return None
+
 
 # 4개 타임프레임 모두 가져오기
 def fetch_ohlcv_all_timeframes(symbol: str):
