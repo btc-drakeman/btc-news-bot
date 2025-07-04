@@ -1,4 +1,4 @@
-# ✅ newsbot.py (최신 버전 — /go 및 /buy 10x 확장 포함)
+# ✅ newsbot.py (최신 버전 — /go 중복 제거, /buy 정상화 포함)
 import time
 from flask import Flask, request
 from threading import Thread
@@ -38,39 +38,32 @@ def telegram_webhook():
 
     elif text.lower().startswith("/buy"):
         parts = text.split()
-        if len(parts) == 3 and parts[2].lower().endswith("x"):
+        if len(parts) >= 2:
             symbol = parts[1].upper()
-            leverage = parts[2]
-        elif len(parts) == 2:
-            symbol = parts[1].upper()
-            leverage = "레버리지 미지정"
+            price = fetch_futures_price(symbol)
+            if price:
+                store_position(symbol, "LONG", price)
+                send_telegram(f"💼 {symbol} 매수 포지션 기록 완료\n진입가: ${price:.2f}", chat_id)
+            else:
+                send_telegram(f"❌ 선물 가격 데이터를 가져올 수 없습니다: {symbol}", chat_id)
         else:
             send_telegram("사용법: /buy SYMBOL [레버리지]", chat_id)
-            return
-
-        price = fetch_futures_price(symbol)
-        if price:
-            store_position(symbol, "LONG", price, leverage)
-            send_telegram(f"💼 {symbol} 매수 포지션 기록 완료\n진입가: ${price:.2f}\n레버리지: {leverage}", chat_id)
-        else:
-            send_telegram(f"❌ 선물 가격 데이터를 가져올 수 없습니다: {symbol}", chat_id)
 
     elif text.lower().startswith("/go"):
         parts = text.split()
-        if len(parts) == 3 and parts[2].lower().endswith("x"):
+        if len(parts) >= 2:
             symbol = parts[1].upper()
-            leverage = parts[2]
-            if symbol in SYMBOLS:
-                result = analyze_symbol(symbol)
-                if result:
-                    result = f"<b>📌 가정: {leverage} 레버리지 진입</b>\n" + result
-                    send_telegram(result, chat_id)
-                else:
-                    send_telegram(f"❌ {symbol} 분석 실패", chat_id)
-            else:
-                send_telegram(f"❌ 지원하지 않는 심볼입니다: {symbol}", chat_id)
+            leverage = None
+            if len(parts) >= 3 and parts[2].lower().endswith("x"):
+                try:
+                    leverage = int(parts[2][:-1])
+                except:
+                    leverage = None
+            
+            result = analyze_symbol(symbol, leverage=leverage)
+            send_telegram(result, chat_id)
         else:
-            send_telegram("사용법: /go SYMBOL 10x", chat_id)
+            send_telegram("사용법: /go SYMBOL [레버리지]", chat_id)
 
     elif text.lower() == "/event":
         msg = handle_event_command()
@@ -78,14 +71,13 @@ def telegram_webhook():
 
     return "OK", 200
 
-def store_position(symbol, direction, entry_price, leverage="-"):
+def store_position(symbol, direction, entry_price):
     active_positions[symbol.upper()] = {
         "entry_time": datetime.utcnow(),
         "direction": direction,
-        "entry_price": entry_price,
-        "leverage": leverage
+        "entry_price": entry_price
     }
-    print(f"✅ 포지션 기록됨: {symbol} / {direction} / {entry_price} / {leverage}")
+    print(f"✅ 포지션 기록됨: {symbol} / {direction} / {entry_price}")
 
 def position_monitor_loop():
     while True:
@@ -101,7 +93,6 @@ def position_monitor_loop():
 🕒 현재 시각 (KST): {kst_now:%Y-%m-%d %H:%M}
 📈 진입 방향: {info['direction']}
 💰 진입가: ${info['entry_price']:.2f}
-🎯 레버리지: {info['leverage']}
 🚪 <b>최대 보유시간 도달 → 수동 청산 고려</b>"""
                 send_telegram(message)
                 del active_positions[symbol]
