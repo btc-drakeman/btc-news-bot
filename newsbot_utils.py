@@ -1,4 +1,4 @@
-# ✅ newsbot_utils.py (디버그 추가 포함)
+# ✅ newsbot_utils.py (현물 OHLCV 8컬럼 수정 완료)
 import requests
 import pandas as pd
 from config import MEXC_API_KEY, BOT_TOKEN, USER_IDS, API_URL
@@ -35,7 +35,8 @@ def fetch_spot_ohlcv(symbol, interval='15m'):
     try:
         response = requests.get(url, params=params, timeout=10)
         raw = response.json()
-        df = pd.DataFrame(raw, columns=["timestamp", "open", "high", "low", "close", "volume", "_", "_", "_", "_", "_", "_"])
+        df = pd.DataFrame(raw)
+        df.columns = ["timestamp", "open", "high", "low", "close", "volume", "close_time", "quote_volume"]
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
         df.set_index("timestamp", inplace=True)
         df = df.astype(float)
