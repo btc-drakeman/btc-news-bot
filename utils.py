@@ -1,8 +1,5 @@
-# utils.py
-
 import requests
 import pandas as pd
-from config import MEXC_API_KEY
 
 # MEXC 현물 API 기반 OHLCV 가져오기
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
@@ -20,9 +17,10 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         response.raise_for_status()
 
         raw = response.json()
+
+        # 현물 데이터는 8개 컬럼만 존재함
         df = pd.DataFrame(raw, columns=[
-            "timestamp", "open", "high", "low", "close", "volume",
-            "_close_time", "_quote_volume", "_trades", "_taker_base", "_taker_quote", "_ignore"
+            "timestamp", "open", "high", "low", "close", "volume", "_1", "_2"
         ])
 
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
@@ -34,9 +32,10 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         print(f"❌ OHLCV 요청 실패 [{symbol} {interval}]: {e}")
         return None
 
-# 4개 타임프레임 모두 가져오기
+
+# 4개 타임프레임 모두 가져오기 (1h → 30m 변경)
 def fetch_ohlcv_all_timeframes(symbol: str):
-    intervals = ['1m', '5m', '15m', '1h']
+    intervals = ['1m', '5m', '15m', '30m']  # 1h 제거, 30m 사용
     result = {}
     for interval in intervals:
         df = fetch_ohlcv(symbol, interval)
