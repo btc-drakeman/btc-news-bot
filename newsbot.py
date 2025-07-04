@@ -57,16 +57,20 @@ def position_monitor_loop():
         time.sleep(60)
 
 def send_telegram(text, chat_id=None):
+    print(f"📤 메시지 전송 시도: {text[:30]}...")  # 앞부분만 찍기
     targets = USER_IDS if chat_id is None else [chat_id]
     for uid in targets:
         try:
-            requests.post(f'{API_URL}/sendMessage', data={
+            response = requests.post(f'{API_URL}/sendMessage', data={
                 'chat_id': uid,
                 'text': text,
                 'parse_mode': 'HTML'
             })
+            print(f"✅ 메시지 전송됨 → {uid}, 상태코드: {response.status_code}")
+            if response.status_code != 200:
+                print(f"📛 응답 내용: {response.text}")
         except Exception as e:
-            print(f"텔레그램 오류: {e}")
+            print(f"❌ 텔레그램 오류: {e}")
 
 import requests
 import pandas as pd
