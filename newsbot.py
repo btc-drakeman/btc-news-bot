@@ -1,4 +1,4 @@
-# ✅ newsbot.py (최신 버전 — 현물 기준 분석 + 레버리지별 손익폭 안내)
+# ✅ newsbot.py (최신 버전 — 현물 기준 분석 + 레버리지별 손익폭 안내 + 디버깅 강화)
 import time
 from flask import Flask
 from threading import Thread
@@ -20,7 +20,11 @@ def analysis_loop():
             try:
                 result = analyze_symbol(symbol)
                 if result:
+                    print(f"📨 텔레그램 전송 메시지:
+{result}")
                     send_telegram(result)
+                else:
+                    print(f"⚠️ {symbol} 분석 결과 없음 → 메시지 전송 생략됨")
             except Exception as e:
                 print(f"❌ 분석 중 오류 발생 ({symbol}): {e}")
             time.sleep(3)

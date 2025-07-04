@@ -1,91 +1,117 @@
-# ✅ newsbot_utils.py (현물 기준 분석 + 레버리지별 손익폭 안내 포함)
+# ✅ newsbot_utils.py (최신 버전 — 현물 분석 + 레버리지별 손익폭 안내)
 import requests
 import pandas as pd
 from datetime import datetime
-from config import API_URL, BOT_TOKEN, USER_IDS
+
+from config import API_URL, USER_IDS
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "XRPUSDT", "ETHFIUSDT"]
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0'
+    "User-Agent": "Mozilla/5.0"
 }
 
-# 이모지 세트
-EMOJI = {
-    "up": "📈",
-    "down": "📉",
-    "neutral": "➖",
-    "check": "✅",
-    "warn": "⚠️",
-    "info": "ℹ️",
-    "bot": "🤖",
-    "money": "💰",
-    "time": "⏰"
-}
-
-def send_telegram(text):
-    for uid in USER_IDS:
+def send_telegram(text, chat_id=None):
+    targets = USER_IDS if chat_id is None else [chat_id]
+    for uid in targets:
         try:
-            response = requests.post(f'{API_URL}/sendMessage', data={
-                'chat_id': uid,
-                'text': text,
-                'parse_mode': 'HTML'
+            resp = requests.post(f"{API_URL}/sendMessage", data={
+                "chat_id": uid,
+                "text": text,
+                "parse_mode": "HTML"
             })
-            print(f"📤 메시지 전송 시도: {text[:30]}...\n✅ 메시지 전송됨 → {uid}, 상태코드: {response.status_code}")
+            print(f"✅ 메시지 전송됨 → {uid}, 상태코드: {resp.status_code}")
         except Exception as e:
-            print(f"❌ 텔레그램 전송 실패 ({uid}): {e}")
+            print(f"❌ 텔레그램 전송 오류: {e}")
+
+def fetch_ohlcv_spot(symbol, interval="15m", limit=100):
+    url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    print(f"📡 요청 URL: {url}")
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        data = resp.json()
+        df = pd.DataFrame(data, columns=["time", "open", "high", "low", "close", "volume", "close_time", "quote_volume", "trades", "taker_base_volume", "taker_quote_volume", "ignore"])
+        df["time"] = pd.to_datetime(df["time"], unit="ms")
+        df.set_index("time", inplace=True)
+        df = df[["open", "high", "low", "close", "volume"]].astype(float)
+        return df
+    except Exception as e:
+        print(f"❌ OHLCV 가져오기 실패: {e}")
+        return None
 
 def analyze_symbol(symbol):
     print(f"📊 analyze_symbol() 호출됨: {symbol}")
-    url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=15m"
-    print(f"📡 요청 URL: {url}")
-    
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-    except Exception as e:
-        print(f"❌ 데이터 요청 실패: {e}")
+    df = fetch_ohlcv_spot(symbol)
+    if df is None or len(df) < 50:
+        print("⚠️ 분석 결과 없음 (데이터 부족)")
         return None
 
-    if not data or isinstance(data, dict):
-        print("❌ 받은 데이터가 비정상적입니다")
-        return None
+    close = df["close"]
+    volume = df["volume"]
 
-    df = pd.DataFrame(data, columns=[
-        'timestamp', 'open', 'high', 'low', 'close', 'volume',
-        'close_time', 'quote_asset_volume', 'num_trades',
-        'taker_buy_base', 'taker_buy_quote', 'ignore'
+    rsi = compute_rsi(close)
+    macd_val, macd_signal = compute_macd(close)
+    ema_fast = df["close"].ewm(span=12).mean()
+    ema_slow = df["close"].ewm(span=26).mean()
+
+    score = 0
+    explanation = []
+
+    if rsi[-1] > 70:
+        explanation.append("📉 RSI: 과매수 (하락 우세)")
+    elif rsi[-1] < 30:
+        explanation.append("📈 RSI: 과매도 (상승 가능)")
+        score += 1
+    else:
+        explanation.append("📊 RSI: 중립")
+
+    if macd_val[-1] > macd_signal[-1]:
+        explanation.append("📈 MACD: 골든크로스 (상승 신호)")
+        score += 1
+    else:
+        explanation.append("📉 MACD: 데드크로스 (하락 신호)")
+
+    if ema_fast[-1] > ema_slow[-1]:
+        explanation.append("📐 EMA: 단기 상승 흐름")
+        score += 1
+    else:
+        explanation.append("📐 EMA: 단기 하락 흐름")
+
+    price_now = close.iloc[-1]
+
+    tp_list = [round(price_now * (1 + 0.01 * lev), 2) for lev in [10, 20, 30, 50]]
+    sl_list = [round(price_now * (1 - 0.005 * lev), 2) for lev in [10, 20, 30, 50]]
+
+    price_block = "💸 <b>현물 기준 참고 손익폭</b>\n"
+    price_block += "\n".join([
+        f"🔹 {lev}x → 익절: ${tp:,} / 손절: ${sl:,}" for lev, tp, sl in zip([10, 20, 30, 50], tp_list, sl_list)
     ])
 
-    df['close'] = df['close'].astype(float)
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    df.set_index('timestamp', inplace=True)
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    result = f"""
+📊 <b>{symbol} 기술분석 (현물 기준)</b>
+🕒 {now} UTC
 
-    close = df['close']
-    current_price = close.iloc[-1]
-    prev_price = close.iloc[-2]
-    change_pct = ((current_price - prev_price) / prev_price) * 100
+{chr(10).join(explanation)}
 
-    direction = EMOJI['up'] if change_pct > 0 else EMOJI['down'] if change_pct < 0 else EMOJI['neutral']
-    
-    kst_now = datetime.utcnow() + pd.Timedelta(hours=9)
-    
-    # 레버리지별 참고 손익폭 계산
-    ref_rows = []
-    for lev in [10, 20, 30, 50]:
-        tp = current_price * (1 + (0.02 / lev))
-        sl = current_price * (1 - (0.01 / lev))
-        ref_rows.append(f"<b>{lev}x</b> ➤ 익절: ${tp:.2f} / 손절: ${sl:.2f}")
-
-    reference_price_info = '\n'.join(ref_rows)
-
-    message = f"""
-{EMOJI['bot']} <b>{symbol} 기술분석</b>
-{EMOJI['time']} 기준 시각 (KST): {kst_now:%Y-%m-%d %H:%M:%S}
-
-{EMOJI['money']} 현재가: ${current_price:.2f} {direction} ({change_pct:.2f}%)
-
-📌 <b>레버리지별 참고 손익폭</b>
-{reference_price_info}
+{price_block}
 """
-    return message.strip()
+    print("📨 텔레그램 전송 메시지:", result)
+    return result
+
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=period).mean()
+    avg_loss = loss.rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(50)
+
+def compute_macd(series):
+    ema12 = series.ewm(span=12, adjust=False).mean()
+    ema26 = series.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
