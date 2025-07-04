@@ -77,8 +77,11 @@ def fetch_ohlcv(symbol, interval='1'):
         "interval": interval,
         "limit": 300
     }
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
     try:
-        res = requests.get(url, params=params, timeout=10)
+        res = requests.get(url, params=params, headers=headers, timeout=10)
         res.raise_for_status()
         data = res.json().get("result", {}).get("list", [])
         if not data:
@@ -90,6 +93,7 @@ def fetch_ohlcv(symbol, interval='1'):
     except Exception as e:
         print(f"{symbol} ({interval}) 데이터 요청 실패: {e}")
         return None
+
 
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
