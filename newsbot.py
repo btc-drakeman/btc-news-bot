@@ -18,6 +18,13 @@ SYMBOLS = ['BTC_USDT', 'ETH_USDT', 'XRP_USDT', 'ETHFI_USDT']
 # === Flask 앱 생성 ===
 app = Flask(__name__)
 
+@app.route(f"/bot{BOT_TOKEN}", methods=['POST'])
+def telegram_webhook():
+    data = request.get_json()
+    print(f"📩 텔레그램 Webhook 데이터 수신됨:\n{data}")
+    return "OK", 200
+
+
 # === 최대 보유시간 (분) 설정 ===
 symbol_max_hold_time = {
     "BTC_USDT": 30,
