@@ -5,19 +5,21 @@ from flask import Flask, request
 from threading import Thread
 from datetime import datetime, timedelta
 import re
+from economic_alert import start_economic_schedule
+from event_risk import adjust_direction_based_on_event, handle_event_command
 
 # === 텔레그램 설정 ===
 BOT_TOKEN = '7887009657:AAGsqVHBhD706TnqCjx9mVfp1YIsAtQVN1w'
 USER_IDS = ['7505401062', '7576776181']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
-# === Binance 선물 심볼 설정 ===
+# === 분석할 코인 ===
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']
 
 # === Flask 앱 생성 ===
 app = Flask(__name__)
 
-# === 1. 코인별 최대 보유시간 (분 단위)
+# === 최대 보유시간 (분) 설정 ===
 symbol_max_hold_time = {
     "BTCUSDT": 30,
     "ETHUSDT": 75,
@@ -25,10 +27,9 @@ symbol_max_hold_time = {
     "ETHFIUSDT": 60,
 }
 
-# === 2. 진입 포지션 추적용 메모리 ===
+# === 포지션 메모리 ===
 active_positions = {}
 
-# === 3. 진입 후 저장 함수 (명령어 /buy 입력 시 호출) ===
 def store_position(symbol, direction, entry_price):
     active_positions[symbol.upper()] = {
         "entry_time": datetime.utcnow(),
@@ -37,7 +38,6 @@ def store_position(symbol, direction, entry_price):
     }
     print(f"✅ 포지션 기록됨: {symbol} / {direction} / {entry_price}")
 
-# === 4. 보유시간 초과 감시 루프 ===
 def position_monitor_loop():
     while True:
         now = datetime.utcnow()
@@ -52,14 +52,11 @@ def position_monitor_loop():
 🕒 현재 시각 (KST): {kst_now:%Y-%m-%d %H:%M}
 📈 진입 방향: {info['direction']}
 💰 진입가: ${info['entry_price']:.2f}
-
-🚪 <b>최대 보유시간 도달 → 수동 청산 고려</b>
-                """
+🚪 <b>최대 보유시간 도달 → 수동 청산 고려</b>"""
                 send_telegram(message)
                 del active_positions[symbol]
         time.sleep(60)
 
-# === 텔레그램 전송 ===
 def send_telegram(text, chat_id=None):
     targets = USER_IDS if chat_id is None else [chat_id]
     for uid in targets:
@@ -69,18 +66,23 @@ def send_telegram(text, chat_id=None):
                 'text': text,
                 'parse_mode': 'HTML'
             })
-            print(f"메시지 전송됨 → {uid}")
         except Exception as e:
-            print(f"텔레그램 전송 오류 (chat_id={uid}): {e}")
+            print(f"텔레그램 오류: {e}")
 
-# === Binance 선물 데이터 가져오기 ===
-def fetch_ohlcv(symbol, interval='1m'):
-    url = f"https://fapi.binance.com/fapi/v1/klines"
-    params = {"symbol": symbol.upper(), "interval": interval, "limit": 300}
+def fetch_ohlcv(symbol, interval='1'):
+    url = "https://api.bybit.com/v5/market/kline"
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "interval": interval,
+        "limit": 300
+    }
     try:
         res = requests.get(url, params=params, timeout=10)
         res.raise_for_status()
-        data = res.json()
+        data = res.json().get("result", {}).get("list", [])
+        if not data:
+            raise ValueError("빈 데이터 수신")
         closes = [float(x[4]) for x in data]
         volumes = [float(x[5]) for x in data]
         df = pd.DataFrame({"close": closes, "volume": volumes})
@@ -89,7 +91,6 @@ def fetch_ohlcv(symbol, interval='1m'):
         print(f"{symbol} ({interval}) 데이터 요청 실패: {e}")
         return None
 
-# === 기술지표 계산 ===
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = delta.where(delta > 0, 0.0)
@@ -114,7 +115,6 @@ def calculate_indicators(df):
     df['lower_band'] = df['bollinger_mid'] - 2 * df['bollinger_std']
     return df
 
-# === 점수 계산 ===
 def calculate_weighted_score(last, prev, df, explain):
     score = 0
     total_weight = 0
@@ -164,9 +164,8 @@ def calculate_weighted_score(last, prev, df, explain):
 
     return round((score / total_weight) * 5, 2)
 
-# === 멀티타임프레임 분석 ===
 def analyze_multi_timeframe(symbol):
-    timeframes = [('1m', 0.5), ('5m', 1.0), ('15m', 1.5)]
+    timeframes = [('1', 0.5), ('5', 1.0), ('15', 1.5)]
     total_score = 0
     total_weight = 0
     final_explain = []
@@ -182,7 +181,7 @@ def analyze_multi_timeframe(symbol):
         score = calculate_weighted_score(last, prev, df, explain)
         total_score += score * weight
         total_weight += weight
-        if interval == '15m':
+        if interval == '15':
             final_explain = explain
             price_now = last['close']
     if total_weight == 0 or price_now is None:
@@ -190,57 +189,6 @@ def analyze_multi_timeframe(symbol):
     final_score = round(total_score / total_weight, 2)
     return final_score, final_explain, price_now
 
-# === 진입가 범위 계산 ===
-def calculate_entry_range(df, price_now):
-    recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
-    if pd.isna(recent_volatility) or recent_volatility == 0:
-        return price_now * 0.995, price_now * 1.005
-    buffer = max(0.0025, min(recent_volatility * 3, 0.015))
-    return price_now * (1 - buffer), price_now * (1 + buffer)
-
-# === 손절 비율 계산 ===
-def get_safe_stop_rate(direction, leverage, default_stop_rate):
-    if leverage is None:
-        return default_stop_rate
-    safe_margin = 0.8
-    if direction == "롱 (Long)":
-        max_safe_rate = 1 - 1 / (1 + 1 / leverage)
-    elif direction == "숏 (Short)":
-        max_safe_rate = (1 / (1 - 1 / leverage)) - 1
-    else:
-        return default_stop_rate
-    return round(min(default_stop_rate, max_safe_rate * safe_margin), 4)
-
-# === 최종 메시지 구성 ===
-def format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit):
-    now_kst = datetime.utcnow() + timedelta(hours=9)
-    action_line = {
-        "롱 (Long)": "🟢 추천 액션: 롱 포지션 진입",
-        "숏 (Short)": "🔴 추천 액션: 숏 포지션 진입",
-        "관망": "⚪ 추천 액션: 관망 (진입 자제)"
-    }[direction]
-
-    msg = f"""
-📊 {symbol.upper()} 기술 분석 (Binance Futures)
-🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
-💰 현재가: ${price_now:,.4f}
-
-{action_line}
-▶️ 종합 분석 점수: {score}/5
-
-""" + '\n'.join(explain)
-
-    if direction != "관망":
-        msg += f"""\n\n📌 진입 전략 제안
-🎯 진입 권장가: ${entry_low:,.4f} ~ ${entry_high:,.4f}
-🛑 손절가: ${stop_loss:,.4f}
-🟢 익절가: ${take_profit:,.4f}"""
-    else:
-        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.4f} ~ ${entry_high:,.4f}"
-
-    return msg
-
-# === 심볼 분석 ===
 def analyze_symbol(symbol, leverage=None):
     score, explain, price_now = analyze_multi_timeframe(symbol)
     if score is None:
@@ -253,9 +201,7 @@ def analyze_symbol(symbol, leverage=None):
     else:
         direction = "관망"
 
-    from event_risk import adjust_direction_based_on_event
-    now_kst = datetime.utcnow() + timedelta(hours=9)
-    direction, reasons = adjust_direction_based_on_event(symbol, direction, now_kst)
+    direction, reasons = adjust_direction_based_on_event(symbol, direction, datetime.utcnow() + timedelta(hours=9))
     for r in reasons:
         explain.append(f"⚠️ 외부 이벤트 반영: {r}")
 
@@ -278,21 +224,56 @@ def analyze_symbol(symbol, leverage=None):
 
     return format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit)
 
-# === 반복 분석 루프 ===
-def analysis_loop():
-    while True:
-        for symbol in SYMBOLS:
-            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-            result = analyze_symbol(symbol)
-            if result:
-                send_telegram(result)
-            time.sleep(3)
-        time.sleep(600)
+def calculate_entry_range(df, price_now):
+    recent_volatility = df['close'].pct_change().abs().rolling(10).mean().iloc[-1]
+    if pd.isna(recent_volatility) or recent_volatility == 0:
+        return price_now * 0.995, price_now * 1.005
+    buffer = max(0.0025, min(recent_volatility * 3, 0.015))
+    return price_now * (1 - buffer), price_now * (1 + buffer)
 
-# === 웹훅 ===
+def get_safe_stop_rate(direction, leverage, default_stop_rate):
+    if leverage is None:
+        return default_stop_rate
+    safe_margin = 0.8
+    if direction == "롱 (Long)":
+        max_safe_rate = 1 - 1 / (1 + 1 / leverage)
+    elif direction == "숏 (Short)":
+        max_safe_rate = (1 / (1 - 1 / leverage)) - 1
+    else:
+        return default_stop_rate
+    return round(min(default_stop_rate, max_safe_rate * safe_margin), 4)
+
+def format_message(symbol, price_now, score, explain, direction, entry_low, entry_high, stop_loss, take_profit):
+    now_kst = datetime.utcnow() + timedelta(hours=9)
+    action_line = {
+        "롱 (Long)": "🟢 추천 액션: 롱 포지션 진입",
+        "숏 (Short)": "🔴 추천 액션: 숏 포지션 진입",
+        "관망": "⚪ 추천 액션: 관망 (진입 자제)"
+    }[direction]
+
+    msg = f"""
+📊 {symbol.upper()} 기술 분석 (Bybit Futures)
+🕒 {now_kst.strftime('%Y-%m-%d %H:%M:%S')}
+💰 현재가: ${price_now:,.4f}
+
+{action_line}
+▶️ 종합 분석 점수: {score}/5
+
+""" + '\n'.join(explain)
+
+    if direction != "관망":
+        msg += f"""\n\n📌 진입 전략 제안
+🎯 진입 권장가: ${entry_low:,.4f} ~ ${entry_high:,.4f}
+🛑 손절가: ${stop_loss:,.4f}
+🟢 익절가: ${take_profit:,.4f}"""
+    else:
+        msg += f"\n\n📌 참고 가격 범위: ${entry_low:,.4f} ~ ${entry_high:,.4f}"
+
+    return msg
+
 @app.route('/')
 def home():
-    return "✅ Binance Futures 기반 기술분석 봇 작동 중!"
+    return "✅ Bybit 기반 분석 봇 작동 중"
 
 @app.route(f"/bot{BOT_TOKEN}", methods=['POST'])
 def telegram_webhook():
@@ -301,7 +282,6 @@ def telegram_webhook():
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '').strip().lower()
         if text == "/event":
-            from event_risk import handle_event_command
             send_telegram(handle_event_command(), chat_id=chat_id)
         elif text.startswith("/buy"):
             match = re.match(r"/buy (\w+)", text)
@@ -323,9 +303,7 @@ def telegram_webhook():
                 send_telegram(msg or f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
     return '', 200
 
-# === 실행 ===
 if __name__ == '__main__':
-    from economic_alert import start_economic_schedule
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop, daemon=True).start()
     Thread(target=start_economic_schedule, daemon=True).start()
