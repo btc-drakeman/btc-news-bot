@@ -19,10 +19,12 @@ def analysis_loop():
             print(f"📊 analyze_symbol() 호출됨: {symbol}")
             try:
                 result = analyze_symbol(symbol)
-                print(f"📦 분석 결과: {bool(result)}")
+                print(f"📦 분석 결과 존재 여부: {bool(result)}")
                 if result:
                     print(f"📨 텔레그램 전송 메시지:\n{result}")
                     send_telegram(result)
+                else:
+                    print(f"⚠️ {symbol}에 대해 분석 결과 없음")
             except Exception as e:
                 print(f"❌ 분석 중 오류 발생 ({symbol}): {e}")
             time.sleep(3)
