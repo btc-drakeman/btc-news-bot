@@ -303,6 +303,16 @@ def telegram_webhook():
                 send_telegram(msg or f"⚠️ 분석 실패: {symbol} 데이터를 불러올 수 없습니다.", chat_id=chat_id)
     return '', 200
 
+def analysis_loop():
+    while True:
+        for symbol in SYMBOLS:
+            print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
+            result = analyze_symbol(symbol)
+            if result:
+                send_telegram(result)
+            time.sleep(3)
+        time.sleep(600)
+
 if __name__ == '__main__':
     Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
     Thread(target=analysis_loop, daemon=True).start()
