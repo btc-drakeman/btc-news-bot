@@ -5,7 +5,7 @@ from threading import Thread
 from datetime import datetime
 from config import SYMBOLS
 from analyzer import analyze_symbol
-from telegram_bot import send_telegram
+from notifier import send_telegram
 
 app = Flask(__name__)
 
