@@ -4,11 +4,6 @@ import requests
 from config import API_URL, USER_IDS
 
 def send_telegram(message: str, chat_id: str = None):
-    """
-    텔레그램 메시지 전송 함수
-    :param message: 전송할 텍스트 (HTML 지원)
-    :param chat_id: 특정 유저 ID (기본값은 USER_IDS 전체)
-    """
     targets = [chat_id] if chat_id else USER_IDS
     for uid in targets:
         try:

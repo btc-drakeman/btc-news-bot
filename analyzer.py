@@ -133,4 +133,7 @@ def analyze_symbol(symbol: str):
 🟢 익절가: ${take_profit:.4f}
 """
     send_telegram(message)
+       print("📤 텔레그램 메시지 전송 시도 중...")
+    send_telegram(message)
     print(f"✅ 완료 → {symbol}")
+
