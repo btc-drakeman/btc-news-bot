@@ -3,7 +3,6 @@ import requests
 import pandas as pd
 from datetime import datetime
 from config import USER_IDS
-from newsbot_utils import analyze_symbol, send_telegram
 
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']
 
