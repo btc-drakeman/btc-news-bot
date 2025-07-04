@@ -6,7 +6,7 @@ from config import MEXC_API_KEY
 
 # MEXC 선물 OHLCV 가져오기
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
-    url = "https://contract.mexc.com/api/v1/kline"
+    url = "url = "https://placing-ending-ave-thickness.trycloudflare.com/api/v1/kline"
     params = {
         "symbol": symbol,
         "interval": interval,
