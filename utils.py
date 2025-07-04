@@ -4,45 +4,35 @@ import requests
 import pandas as pd
 from config import MEXC_API_KEY
 
-# MEXC 선물 OHLCV 가져오기
+# MEXC 현물 API 기반 OHLCV 가져오기
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
-    url = "https://placing-ending-ave-thickness.trycloudflare.com/api/v1/kline"
+    url = "https://api.mexc.com/api/v3/klines"
     params = {
-        "symbol": symbol,
+        "symbol": symbol.lower(),   # 현물 API는 모두 소문자
         "interval": interval,
         "limit": limit
     }
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-    if MEXC_API_KEY:
-        headers["ApiKey"] = MEXC_API_KEY
 
     try:
-        print(f"📡 MEXC 요청 → {symbol} @ {interval}")
-        print(f"📡 요청 URL: {url}, params: {params}")
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        print(f"📡 응답: {response.status_code}, 내용: {response.text[:200]}")  # 응답 앞부분만 출력
-
+        print(f"📡 MEXC 현물 요청 → {symbol} @ {interval}")
+        response = requests.get(url, params=params, timeout=10)
+        print(f"📡 응답: {response.status_code}, 내용: {response.text[:200]}")
         response.raise_for_status()
-        data = response.json().get("data", [])
-        if not data:
-            print(f"⚠️ 받은 데이터 없음: {symbol} ({interval})")
-            return None
 
-        df = pd.DataFrame(data)
-        df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
+        raw = response.json()
+        df = pd.DataFrame(raw, columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "_close_time", "_quote_volume", "_trades", "_taker_base", "_taker_quote", "_ignore"
+        ])
+
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
         df.set_index("timestamp", inplace=True)
-        df = df.astype(float)
-        return df[["open", "high", "low", "close", "volume"]]
+        df = df[["open", "high", "low", "close", "volume"]].astype(float)
+        return df
 
     except Exception as e:
-          import traceback
-          print(f"❌ OHLCV 요청 실패 [{symbol} {interval}]: {e}")
-          traceback.print_exc()  # ✅ 전체 에러 스택 출력
-          return None
-
+        print(f"❌ OHLCV 요청 실패 [{symbol} {interval}]: {e}")
+        return None
 
 # 4개 타임프레임 모두 가져오기
 def fetch_ohlcv_all_timeframes(symbol: str):

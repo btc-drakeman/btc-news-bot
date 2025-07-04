@@ -6,15 +6,15 @@ USER_IDS = ['7505401062']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
 # ✅ 분석 대상 심볼 (MEXC 선물 표기 기준)
-SYMBOLS = ['BTC_USDT', 'ETH_USDT', 'XRP_USDT', 'SOL_USDT']
+SYMBOLS = ['btcusdt', 'ethusdt', 'xrpusdt', 'solusdt']
 
 # ✅ MEXC API Key (선택사항: 없으면 인증 헤더 생략 가능)
 MEXC_API_KEY = ''
 
 # ✅ 각 심볼별 최대 보유 시간 (분) – 추후 포지션 추적 기능용
 MAX_HOLD_MINUTES = {
-    'BTC_USDT': 30,
-    'ETH_USDT': 60,
-    'XRP_USDT': 90,
-    'SOL_USDT': 45,
+    'btcusdt': 30,
+    'ethusdt': 60,
+    'xrpusdt': 90,
+    'solusdt': 45,
 }

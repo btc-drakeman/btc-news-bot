@@ -12,32 +12,6 @@ app = Flask(__name__)
 def index():
     return "🚀 Crypto Analyzer Bot is running."
 
-# main.py
-
-from flask import Flask, request, jsonify
-import requests
-
-app = Flask(__name__)
-
-@app.route("/api/v1/kline")
-def proxy_kline():
-    # MEXC에 실제 요청 전달
-    symbol = request.args.get("symbol")
-    interval = request.args.get("interval")
-    limit = request.args.get("limit", "100")
-
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit
-    }
-
-    try:
-        response = requests.get("https://contract.mexc.com/api/v1/kline", params=params, timeout=10)
-        return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 # 기술 분석 루프
 def analysis_loop():
     while True:
