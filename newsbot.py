@@ -79,8 +79,8 @@ from config import MEXC_API_KEY
 def fetch_ohlcv(symbol, interval):
     url = "https://contract.mexc.com/api/v1/kline"
     params = {
-        "symbol": symbol,      # 예: "BTC_USDT"
-        "interval": interval,  # 예: "1m", "5m", "15m"
+        "symbol": symbol,  # 예: BTC_USDT
+        "interval": interval,  # 예: 1m, 15m
         "limit": 300
     }
 
