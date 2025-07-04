@@ -92,7 +92,7 @@ def action_recommendation(score):
     else:
         return "매도 또는 숏 포지션 고려"
 
-def analyze_symbol(symbol, leverage=none):
+def analyze_symbol(symbol, leverage=None):
     print(f"📊 analyze_symbol() 호출됨: {symbol}")
     df = fetch_spot_ohlcv(symbol)
     if df is None or len(df) < 50:
