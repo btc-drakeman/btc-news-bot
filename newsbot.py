@@ -1,4 +1,4 @@
-# ✅ newsbot.py (최신 버전 — 현물 기준 분석 + 레버리지별 손익폭 안내)
+# newsbot.py
 import time
 from flask import Flask
 from threading import Thread
