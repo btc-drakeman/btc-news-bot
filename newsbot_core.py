@@ -1,7 +1,8 @@
 import time
 from datetime import datetime
 import pandas as pd
-from newsbot import send_telegram
+from newsbot import fetch_ohlcv, send_telegram
+
 
 # === 기술 지표 계산 함수 ===
 def calculate_rsi(df, period=14):
