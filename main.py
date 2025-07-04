@@ -16,9 +16,11 @@ def index():
 def analysis_loop():
     while True:
         for symbol in SYMBOLS:
+            print(f"🌀 루프 진입: {symbol}")  # ✅ 루프 확인용 로그
             analyze_symbol(symbol)
-            time.sleep(3)  # 심볼 간 딜레이
-        time.sleep(600)  # 전체 루프 주기: 10분
+            time.sleep(3)
+        time.sleep(600)
+
 
 if __name__ == "__main__":
     # Flask 서버 + 분석 루프 병렬 실행
