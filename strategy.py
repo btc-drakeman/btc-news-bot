@@ -68,6 +68,7 @@ def analyze_volume(df: pd.DataFrame):
 def analyze_indicators(data_dict: dict):
     total_score = 0.0
     logs = []
+    indicators_result = {}
 
     for tf, df in data_dict.items():
         rsi_text, rsi_score = analyze_rsi(df)
@@ -75,6 +76,18 @@ def analyze_indicators(data_dict: dict):
         ema_text, ema_score = analyze_ema_slope(df)
         boll_text, boll_score = analyze_bollinger(df)
         vol_text, vol_score = analyze_volume(df)
+
+        # 메시지에 표시할 지표 값은 '1m' 타임프레임 기준으로만 수집
+        if tf == '1m':
+            indicators_result = {
+                'RSI': rsi_text,
+                'MACD': macd_text,
+                'EMA': ema_text,
+                'EMA_Slope': f"{df['close'].ewm(span=20).mean().diff().iloc[-1]:.5f}",
+                'Bollinger': boll_text,
+                'Volume': vol_text,
+                'Trend_1h': '분석 예정'  # 1h 추세는 따로 분석 코드가 있다면 여기에 추가
+            }
 
         score = (
             rsi_score * 1.0 +
@@ -97,4 +110,4 @@ def analyze_indicators(data_dict: dict):
     else:
         action = '매도 또는 비관적 흐름'
 
-    return final_score, action
+    return final_score, action, indicators_result
