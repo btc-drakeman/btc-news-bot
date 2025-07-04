@@ -1,151 +1,22 @@
-# ✅ newsbot_core.py (디버그 추가 포함)
 import time
-from datetime import datetime, timedelta
+import requests
 import pandas as pd
-from newsbot_utils import send_telegram, fetch_spot_ohlcv, SYMBOLS
-from event_risk import adjust_direction_based_on_event
+from datetime import datetime
+from config import USER_IDS
+from newsbot_utils import analyze_symbol, send_telegram
 
-
-def calculate_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    last_rsi = rsi.iloc[-1]
-    if last_rsi > 70:
-        return "과매수 (하락 가능성)"
-    elif last_rsi < 30:
-        return "과매도 (상승 가능성)"
-    else:
-        return "중립"
-
-def calculate_macd(df):
-    ema12 = df['close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['close'].ewm(span=26, adjust=False).mean()
-    macd = ema12 - ema26
-    signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal
-    if macd.iloc[-1] > signal.iloc[-1] and hist.iloc[-1] > hist.iloc[-2]:
-        return "골든크로스 ↗️ 상승 전환 가능성"
-    elif macd.iloc[-1] < signal.iloc[-1] and hist.iloc[-1] < hist.iloc[-2]:
-        return "데드크로스 ↘️ 하락 경고"
-    else:
-        return "중립"
-
-def calculate_ema(df):
-    ema_short = df['close'].ewm(span=10, adjust=False).mean()
-    ema_long = df['close'].ewm(span=50, adjust=False).mean()
-    if ema_short.iloc[-1] > ema_long.iloc[-1]:
-        return "정배열 (상승 흐름)"
-    elif ema_short.iloc[-1] < ema_long.iloc[-1]:
-        return "역배열 (하락 흐름)"
-    else:
-        return "중립"
-
-def calculate_bollinger(df):
-    ma20 = df['close'].rolling(window=20).mean()
-    std = df['close'].rolling(window=20).std()
-    upper = ma20 + 2 * std
-    lower = ma20 - 2 * std
-    last = df['close'].iloc[-1]
-    if last > upper.iloc[-1]:
-        return "상단 돌파 (과열 가능성)"
-    elif last < lower.iloc[-1]:
-        return "하단 이탈 (저평가 가능성)"
-    else:
-        return "중립"
-
-def calculate_volume(df):
-    vol = df['volume']
-    avg = vol.rolling(window=20).mean()
-    if vol.iloc[-1] > avg.iloc[-1] * 1.5:
-        return "급등 (매집 또는 투매)"
-    elif vol.iloc[-1] < avg.iloc[-1] * 0.5:
-        return "급감 (관망 상태)"
-    else:
-        return "중립"
-
-def calculate_score(rsi, macd, ema, boll, volume):
-    score = 0.0
-    if "상승" in macd or "골든" in macd:
-        score += 1.5
-    if "정배열" in ema or "상승" in ema:
-        score += 1.2
-    if "과매도" in rsi or "상승" in rsi:
-        score += 1.0
-    if "상단 돌파" in boll or "저평가" in boll:
-        score += 0.8
-    if "급등" in volume:
-        score += 0.5
-    return round(score, 2)
-
-def action_recommendation(score):
-    if score >= 4.0:
-        return "강한 매수 시그널 (진입 고려)"
-    elif score >= 2.5:
-        return "관망 또는 분할 진입"
-    elif score >= 1.5:
-        return "진입 자제 (약한 신호)"
-    else:
-        return "매도 또는 숏 포지션 고려"
-
-def analyze_symbol(symbol, leverage=None):
-    print(f"📊 analyze_symbol() 호출됨: {symbol}")
-    df = fetch_spot_ohlcv(symbol)
-    if df is None or len(df) < 50:
-        print(f"❌ 데이터 부족: {symbol}")
-        return None
-
-    rsi = calculate_rsi(df)
-    macd = calculate_macd(df)
-    ema = calculate_ema(df)
-    boll = calculate_bollinger(df)
-    volume = calculate_volume(df)
-
-    score = calculate_score(rsi, macd, ema, boll, volume)
-    recommendation = action_recommendation(score)
-
-    now_kst = datetime.utcnow() + timedelta(hours=9)
-    recommendation, reasons = adjust_direction_based_on_event(symbol, recommendation, now_kst)
-
-    price_now = df['close'].iloc[-1]
-    upper = df['close'].rolling(20).mean().iloc[-1] + 2 * df['close'].rolling(20).std().iloc[-1]
-    lower = df['close'].rolling(20).mean().iloc[-1] - 2 * df['close'].rolling(20).std().iloc[-1]
-    take_profit = price_now * 1.02
-    stop_loss = price_now * 0.985
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    result = f"""
-📊 {symbol} 기술분석 (현물 기준)
-🕒 {now}
-💰 현재가: ${price_now:.4f}
-
-📌 RSI: {rsi}
-📌 MACD: {macd}
-📌 EMA: {ema}
-📌 Bollinger: {boll}
-📌 거래량: {volume}
-
-▶️ 종합 분석 점수: {score} / 5.0
-📌 포지션: {recommendation}
-📈 참고 가격 범위: ${lower:.2f} ~ ${upper:.2f}
-🎯 익절가: ${take_profit:.2f}
-🛑 손절가: ${stop_loss:.2f} 
-"""
-    if reasons:
-        result += "\n⚠️ 이벤트 리스크 감지됨: " + ", ".join(reasons)
-
-    print(f"📢 분석 완료, 텔레그램 전송 시작 → {symbol}")
-    send_telegram(result)
-    print("✅ 텔레그램 전송 완료")
-    return result
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'XRPUSDT', 'ETHFIUSDT']
 
 def analysis_loop():
     while True:
         for symbol in SYMBOLS:
-            analyze_symbol(symbol)
-            time.sleep(5)
-        time.sleep(900)
+            print(f"📊 analyze_symbol() 호출됨: {symbol}")
+            try:
+                result = analyze_symbol(symbol)
+                if result:
+                    for uid in USER_IDS:
+                        send_telegram(result, uid)
+            except Exception as e:
+                print(f"❌ 분석 중 오류 발생 ({symbol}): {e}")
+            time.sleep(3)
+        time.sleep(600)
