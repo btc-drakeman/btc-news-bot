@@ -98,27 +98,39 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"❌ 텔레그램 오류: {e}")
 
+import requests
+import pandas as pd
+from config import MEXC_API_KEY
+
 def fetch_ohlcv(symbol, interval):
     url = "https://contract.mexc.com/api/v1/kline"
     params = {
-        "symbol": symbol,  # 예: BTC_USDT
-        "interval": interval,  # 예: 1m, 15m
+        "symbol": symbol,
+        "interval": interval,
         "limit": 300
     }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "ApiKey": MEXC_API_KEY  # 인증 헤더 (공식문서에 명시되어있지는 않지만 일부 시스템에서는 인식함)
+    }
+
     try:
-        response = requests.get(url, params=params, timeout=10)
+        response = requests.get(url, params=params, headers=headers, timeout=15)
         print(f"📡 요청 URL: {response.url}")
         print(f"📨 응답 예시: {response.text[:200]}...")
         response.raise_for_status()
         raw = response.json().get("data", [])
+
         df = pd.DataFrame(raw)
         if df.empty:
             return None
+
         df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
         df.set_index("timestamp", inplace=True)
         df = df.astype(float)
         return df[["open", "high", "low", "close", "volume"]]
+
     except Exception as e:
         print(f"{symbol} ({interval}) MEXC 선물 데이터 요청 실패: {e}")
         return None
