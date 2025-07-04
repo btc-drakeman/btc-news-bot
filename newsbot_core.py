@@ -3,6 +3,8 @@ from datetime import datetime
 import pandas as pd
 from newsbot import send_telegram
 from newsbot import fetch_ohlcv
+from newsbot import SYMBOLS
+
 
 # === 기술 지표 계산 함수 ===
 def calculate_rsi(df, period=14):
@@ -141,7 +143,7 @@ def analyze_symbol(symbol):
 # === 분석 루프 ===
 def analysis_loop():
     while True:
-        for symbol in ['BTC_USDT', 'ETH_USDT', 'XRP_USDT', 'ETHFI_USDT']:
+        for symbol in SYMBOLS:
             analyze_symbol(symbol)
             time.sleep(3)
         time.sleep(600)

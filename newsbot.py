@@ -86,6 +86,8 @@ def fetch_ohlcv(symbol, interval):
 
     try:
         response = requests.get(url, params=params, timeout=10)
+        print(f"📡 요청 URL: {response.url}")
+        print(f"📨 응답 예시: {response.text[:200]}...")
         response.raise_for_status()
         raw = response.json().get("data", [])
 
