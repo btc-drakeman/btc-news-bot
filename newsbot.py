@@ -22,8 +22,27 @@ app = Flask(__name__)
 def telegram_webhook():
     data = request.get_json()
     print(f"📩 텔레그램 Webhook 데이터 수신됨:\n{data}")
-    return "OK", 200
+    message = data.get("message", {})
+    text = message.get("text", "")
+    chat_id = message.get("chat", {}).get("id", "")
 
+    if text.lower() == "/start":
+        send_telegram("✅ 봇이 정상 작동 중입니다!", chat_id)
+
+    elif text.lower().startswith("/buy"):
+        parts = text.split()
+        if len(parts) == 2:
+            symbol = parts[1].upper()
+            price = fetch_latest_price(symbol)
+            if price:
+                store_position(symbol, "LONG", price)
+                send_telegram(f"💼 {symbol} 매수 포지션 기록 완료\n진입가: ${price:.2f}", chat_id)
+            else:
+                send_telegram(f"❌ 가격 데이터를 가져올 수 없습니다: {symbol}", chat_id)
+        else:
+            send_telegram("사용법: /buy SYMBOL", chat_id)
+
+    return "OK", 200
 
 # === 최대 보유시간 (분) 설정 ===
 symbol_max_hold_time = {
@@ -79,10 +98,6 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"❌ 텔레그램 오류: {e}")
 
-import requests
-import pandas as pd
-from config import MEXC_API_KEY
-
 def fetch_ohlcv(symbol, interval):
     url = "https://contract.mexc.com/api/v1/kline"
     params = {
@@ -90,30 +105,30 @@ def fetch_ohlcv(symbol, interval):
         "interval": interval,  # 예: 1m, 15m
         "limit": 300
     }
-
     try:
         response = requests.get(url, params=params, timeout=10)
         print(f"📡 요청 URL: {response.url}")
         print(f"📨 응답 예시: {response.text[:200]}...")
         response.raise_for_status()
         raw = response.json().get("data", [])
-
         df = pd.DataFrame(raw)
         if df.empty:
             return None
-
         df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
         df.set_index("timestamp", inplace=True)
         df = df.astype(float)
         return df[["open", "high", "low", "close", "volume"]]
-
     except Exception as e:
         print(f"{symbol} ({interval}) MEXC 선물 데이터 요청 실패: {e}")
         return None
 
+def fetch_latest_price(symbol):
+    df = fetch_ohlcv(symbol, '1m')
+    if df is not None and not df.empty:
+        return df['close'].iloc[-1]
+    return None
 
-# 분석 로직과 지표 계산 함수 등은 newsbot_core.py에 위치한다고 가정
 if __name__ == '__main__':
     from economic_alert import start_economic_schedule
     from newsbot_core import analysis_loop, analyze_symbol
