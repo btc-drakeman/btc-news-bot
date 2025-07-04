@@ -4,8 +4,6 @@ import pandas as pd
 from newsbot import send_telegram
 from newsbot import fetch_ohlcv
 
-
-
 # === 기술 지표 계산 함수 ===
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
@@ -135,7 +133,9 @@ def analyze_symbol(symbol):
 🎯 익절가: ${take_profit:.2f}
 🛑 손절가: ${stop_loss:.2f} 
 """
+    print(f"📢 분석 완료, 텔레그램 전송 시작 → {symbol}")
     send_telegram(result)
+    print("✅ 텔레그램 전송 완료")
     return result
 
 # === 분석 루프 ===
@@ -145,3 +145,21 @@ def analysis_loop():
             analyze_symbol(symbol)
             time.sleep(3)
         time.sleep(600)
+
+# === send_telegram 디버깅용 개선 버전 (newsbot.py에서도 같이 쓰일 것) ===
+def send_telegram(text, chat_id=None):
+    from config import BOT_TOKEN, USER_IDS
+    import requests
+    API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
+
+    targets = USER_IDS if chat_id is None else [chat_id]
+    for uid in targets:
+        try:
+            response = requests.post(f'{API_URL}/sendMessage', data={
+                'chat_id': uid,
+                'text': text,
+                'parse_mode': 'HTML'
+            })
+            print(f"🟢 전송 결과: {response.status_code} / {response.text}")
+        except Exception as e:
+            print(f"🔴 텔레그램 오류: {e}")
