@@ -148,20 +148,3 @@ def analysis_loop():
             time.sleep(3)
         time.sleep(600)
 
-# === send_telegram 디버깅용 개선 버전 (newsbot.py에서도 같이 쓰일 것) ===
-def send_telegram(text, chat_id=None):
-    from config import BOT_TOKEN, USER_IDS
-    import requests
-    API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
-
-    targets = USER_IDS if chat_id is None else [chat_id]
-    for uid in targets:
-        try:
-            response = requests.post(f'{API_URL}/sendMessage', data={
-                'chat_id': uid,
-                'text': text,
-                'parse_mode': 'HTML'
-            })
-            print(f"🟢 전송 결과: {response.status_code} / {response.text}")
-        except Exception as e:
-            print(f"🔴 텔레그램 오류: {e}")
