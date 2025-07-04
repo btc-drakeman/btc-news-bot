@@ -1,4 +1,4 @@
-# ✅ newsbot_core.py (현물 기반 분석 구조로 수정)
+# ✅ newsbot_core.py (현물 symbol 포맷 보정 적용)
 import time
 from datetime import datetime, timedelta
 import pandas as pd
@@ -94,7 +94,7 @@ def action_recommendation(score):
 
 def analyze_symbol(symbol):
     print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-    df = fetch_spot_ohlcv(symbol, '15m')
+    df = fetch_spot_ohlcv(symbol)
     if df is None or len(df) < 50:
         print(f"❌ 데이터 부족: {symbol}")
         return None
@@ -147,5 +147,5 @@ def analysis_loop():
     while True:
         for symbol in SYMBOLS:
             analyze_symbol(symbol)
-            time.sleep(5)  # 심볼 간 간격
-        time.sleep(900)  # 전체 루프 주기 15분
+            time.sleep(5)
+        time.sleep(900)

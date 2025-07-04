@@ -1,4 +1,4 @@
-# ✅ newsbot_utils.py (현물+선물 분리 구조 반영)
+# ✅ newsbot_utils.py (선물 심볼 포맷 안정화 적용)
 import requests
 import pandas as pd
 from config import MEXC_API_KEY, BOT_TOKEN, USER_IDS, API_URL
@@ -21,11 +21,12 @@ def send_telegram(text, chat_id=None):
         except Exception as e:
             print(f"❌ 텔레그램 오류: {e}")
 
-# ✅ 현물 데이터 (안정적인 분석용)
+# ✅ 현물 데이터 (분석용)
 def fetch_spot_ohlcv(symbol, interval='15m'):
+    spot_symbol = symbol.replace('_', '')
     url = "https://api.mexc.com/api/v3/klines"
     params = {
-        "symbol": symbol.replace('_', ''),  # BTC_USDT → BTCUSDT
+        "symbol": spot_symbol,
         "interval": interval,
         "limit": 300
     }
@@ -43,14 +44,15 @@ def fetch_spot_ohlcv(symbol, interval='15m'):
 
 # ✅ 선물 가격 조회 (/buy용)
 def fetch_futures_price(symbol):
+    futures_symbol = symbol.replace('_', '').upper()
     url = "https://contract.mexc.com/api/v1/kline"
-    params = {"symbol": symbol, "interval": "1m", "limit": 1}
+    params = {"symbol": futures_symbol, "interval": "1m", "limit": 1}
     try:
         response = requests.get(url, params=params, timeout=15)
         data = response.json().get("data", [])
         if not data:
             return None
-        close_price = float(data[-1][4])  # 종가
+        close_price = float(data[-1][4])
         return close_price
     except Exception as e:
         print(f"❌ 선물 가격 조회 실패 ({symbol}): {e}")
