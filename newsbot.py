@@ -1,34 +1,34 @@
-import requests
-import pandas as pd
+# ✅ newsbot.py (최신 버전 — 현물 기준 분석 + 레버리지별 손익폭 안내)
 import time
 from flask import Flask
 from threading import Thread
 from datetime import datetime
-from config import BOT_TOKEN, USER_IDS
-from newsbot_core import analysis_loop
 
-API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
+from config import BOT_TOKEN, USER_IDS, API_URL
+from newsbot_utils import send_telegram, SYMBOLS, analyze_symbol
+
 app = Flask(__name__)
 
-def send_telegram(text, chat_id=None):
-    targets = USER_IDS if chat_id is None else [chat_id]
-    for uid in targets:
-        try:
-            requests.post(f'{API_URL}/sendMessage', data={
-                'chat_id': uid,
-                'text': text,
-                'parse_mode': 'HTML'
-            })
-            print(f"✅ 메시지 전송됨 → {uid}")
-        except Exception as e:
-            print(f"❌ 메시지 전송 실패 ({uid}): {e}")
+@app.route("/")
+def home():
+    return "Bot is running"
 
-@app.route('/')
-def index():
-    return "Bot is running."
+def analysis_loop():
+    while True:
+        for symbol in SYMBOLS:
+            print(f"📊 analyze_symbol() 호출됨: {symbol}")
+            try:
+                result = analyze_symbol(symbol)
+                if result:
+                    send_telegram(result)
+            except Exception as e:
+                print(f"❌ 분석 중 오류 발생 ({symbol}): {e}")
+            time.sleep(3)
+        time.sleep(600)
 
 if __name__ == '__main__':
     print("📡 기술분석 봇 실행 시작")
-    t = Thread(target=analysis_loop)
-    t.start()
-    app.run(host='0.0.0.0', port=8080)
+    Thread(target=lambda: app.run(host='0.0.0.0', port=8080, threaded=True)).start()
+    Thread(target=analysis_loop, daemon=True).start()
+    while True:
+        time.sleep(60)
