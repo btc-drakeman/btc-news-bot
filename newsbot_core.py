@@ -1,8 +1,8 @@
-# ✅ newsbot_core.py (수정 완료)
+# ✅ newsbot_core.py (순환 import 해결됨)
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
-from newsbot import send_telegram, fetch_ohlcv, SYMBOLS
+from newsbot_utils import send_telegram, fetch_ohlcv, SYMBOLS
 from event_risk import adjust_direction_based_on_event
 
 

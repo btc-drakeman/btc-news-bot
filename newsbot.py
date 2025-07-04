@@ -1,4 +1,4 @@
-# ✅ newsbot.py (수정 완료)
+# ✅ newsbot.py (최종 수정 완료 — 순환 import 해결)
 import requests
 import pandas as pd
 import time
@@ -6,13 +6,16 @@ from flask import Flask, request
 from threading import Thread
 from datetime import datetime, timedelta
 import re
-from config import MEXC_API_KEY, BOT_TOKEN, USER_IDS, API_URL
-from economic_alert import start_economic_schedule, handle_event_command
-from newsbot_core import analysis_loop, analyze_symbol
 
-SYMBOLS = ['BTC_USDT', 'ETH_USDT', 'XRP_USDT', 'ETHFI_USDT']
+from config import BOT_TOKEN, USER_IDS, API_URL
+from newsbot_utils import send_telegram, fetch_ohlcv, SYMBOLS
+from newsbot_core import analysis_loop, analyze_symbol
+from economic_alert import start_economic_schedule, handle_event_command
+
+# === Flask 앱 생성 ===
 app = Flask(__name__)
 
+# === 최대 보유시간 설정 ===
 symbol_max_hold_time = {
     "BTC_USDT": 30,
     "ETH_USDT": 75,
@@ -20,23 +23,8 @@ symbol_max_hold_time = {
     "ETHFI_USDT": 60,
 }
 
+# === 포지션 메모리 ===
 active_positions = {}
-
-def send_telegram(text, chat_id=None):
-    print(f"📤 메시지 전송 시도: {text[:30]}...")
-    targets = USER_IDS if chat_id is None else [chat_id]
-    for uid in targets:
-        try:
-            response = requests.post(f'{API_URL}/sendMessage', data={
-                'chat_id': uid,
-                'text': text,
-                'parse_mode': 'HTML'
-            })
-            print(f"✅ 메시지 전송됨 → {uid}, 상태코드: {response.status_code}")
-            if response.status_code != 200:
-                print(f"📛 응답 내용: {response.text}")
-        except Exception as e:
-            print(f"❌ 텔레그램 오류: {e}")
 
 @app.route("/")
 def home():
@@ -98,26 +86,6 @@ def position_monitor_loop():
                 send_telegram(message)
                 del active_positions[symbol]
         time.sleep(60)
-
-def fetch_ohlcv(symbol, interval):
-    url = "https://contract.mexc.com/api/v1/kline"
-    params = {"symbol": symbol, "interval": interval, "limit": 300}
-    headers = {"ApiKey": MEXC_API_KEY, "User-Agent": "Mozilla/5.0"}
-
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=15)
-        raw = response.json().get("data", [])
-        df = pd.DataFrame(raw)
-        if df.empty:
-            return None
-        df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
-        df.set_index("timestamp", inplace=True)
-        df = df.astype(float)
-        return df[["open", "high", "low", "close", "volume"]]
-    except Exception as e:
-        print(f"❌ {symbol} ({interval}) MEXC 선물 데이터 요청 실패: {e}")
-        return None
 
 def fetch_latest_price(symbol):
     df = fetch_ohlcv(symbol, '1m')
