@@ -1,8 +1,8 @@
-# ✅ newsbot_core.py (순환 import 해결됨)
+# ✅ newsbot_core.py (현물 기반 분석 구조로 수정)
 import time
 from datetime import datetime, timedelta
 import pandas as pd
-from newsbot_utils import send_telegram, fetch_ohlcv, SYMBOLS
+from newsbot_utils import send_telegram, fetch_spot_ohlcv, SYMBOLS
 from event_risk import adjust_direction_based_on_event
 
 
@@ -94,7 +94,7 @@ def action_recommendation(score):
 
 def analyze_symbol(symbol):
     print(f"분석 중: {symbol} ({datetime.now().strftime('%H:%M:%S')})")
-    df = fetch_ohlcv(symbol, '15m')
+    df = fetch_spot_ohlcv(symbol, '15m')
     if df is None or len(df) < 50:
         print(f"❌ 데이터 부족: {symbol}")
         return None
@@ -108,7 +108,6 @@ def analyze_symbol(symbol):
     score = calculate_score(rsi, macd, ema, boll, volume)
     recommendation = action_recommendation(score)
 
-    # ✅ 이벤트 리스크 반영
     now_kst = datetime.utcnow() + timedelta(hours=9)
     recommendation, reasons = adjust_direction_based_on_event(symbol, recommendation, now_kst)
 
@@ -120,7 +119,7 @@ def analyze_symbol(symbol):
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     result = f"""
-📊 {symbol} 기술분석 (MEXC)
+📊 {symbol} 기술분석 (현물 기준)
 🕒 {now}
 💰 현재가: ${price_now:.4f}
 
@@ -148,5 +147,5 @@ def analysis_loop():
     while True:
         for symbol in SYMBOLS:
             analyze_symbol(symbol)
-            time.sleep(3)
-        time.sleep(600)
+            time.sleep(5)  # 심볼 간 간격
+        time.sleep(900)  # 전체 루프 주기 15분

@@ -1,6 +1,4 @@
-# ✅ newsbot.py (최종 수정 완료 — 순환 import 해결)
-import requests
-import pandas as pd
+# ✅ newsbot.py (최신 버전 — /go 및 /buy 10x 확장 포함)
 import time
 from flask import Flask, request
 from threading import Thread
@@ -8,14 +6,12 @@ from datetime import datetime, timedelta
 import re
 
 from config import BOT_TOKEN, USER_IDS, API_URL
-from newsbot_utils import send_telegram, fetch_ohlcv, SYMBOLS
+from newsbot_utils import send_telegram, fetch_futures_price, SYMBOLS
 from newsbot_core import analysis_loop, analyze_symbol
 from economic_alert import start_economic_schedule, handle_event_command
 
-# === Flask 앱 생성 ===
 app = Flask(__name__)
 
-# === 최대 보유시간 설정 ===
 symbol_max_hold_time = {
     "BTC_USDT": 30,
     "ETH_USDT": 75,
@@ -23,7 +19,6 @@ symbol_max_hold_time = {
     "ETHFI_USDT": 60,
 }
 
-# === 포지션 메모리 ===
 active_positions = {}
 
 @app.route("/")
@@ -43,16 +38,39 @@ def telegram_webhook():
 
     elif text.lower().startswith("/buy"):
         parts = text.split()
-        if len(parts) == 2:
+        if len(parts) == 3 and parts[2].lower().endswith("x"):
             symbol = parts[1].upper()
-            price = fetch_latest_price(symbol)
-            if price:
-                store_position(symbol, "LONG", price)
-                send_telegram(f"💼 {symbol} 매수 포지션 기록 완료\n진입가: ${price:.2f}", chat_id)
-            else:
-                send_telegram(f"❌ 가격 데이터를 가져올 수 없습니다: {symbol}", chat_id)
+            leverage = parts[2]
+        elif len(parts) == 2:
+            symbol = parts[1].upper()
+            leverage = "레버리지 미지정"
         else:
-            send_telegram("사용법: /buy SYMBOL", chat_id)
+            send_telegram("사용법: /buy SYMBOL [레버리지]", chat_id)
+            return
+
+        price = fetch_futures_price(symbol)
+        if price:
+            store_position(symbol, "LONG", price, leverage)
+            send_telegram(f"💼 {symbol} 매수 포지션 기록 완료\n진입가: ${price:.2f}\n레버리지: {leverage}", chat_id)
+        else:
+            send_telegram(f"❌ 선물 가격 데이터를 가져올 수 없습니다: {symbol}", chat_id)
+
+    elif text.lower().startswith("/go"):
+        parts = text.split()
+        if len(parts) == 3 and parts[2].lower().endswith("x"):
+            symbol = parts[1].upper()
+            leverage = parts[2]
+            if symbol in SYMBOLS:
+                result = analyze_symbol(symbol)
+                if result:
+                    result = f"<b>📌 가정: {leverage} 레버리지 진입</b>\n" + result
+                    send_telegram(result, chat_id)
+                else:
+                    send_telegram(f"❌ {symbol} 분석 실패", chat_id)
+            else:
+                send_telegram(f"❌ 지원하지 않는 심볼입니다: {symbol}", chat_id)
+        else:
+            send_telegram("사용법: /go SYMBOL 10x", chat_id)
 
     elif text.lower() == "/event":
         msg = handle_event_command()
@@ -60,13 +78,14 @@ def telegram_webhook():
 
     return "OK", 200
 
-def store_position(symbol, direction, entry_price):
+def store_position(symbol, direction, entry_price, leverage="-"):
     active_positions[symbol.upper()] = {
         "entry_time": datetime.utcnow(),
         "direction": direction,
-        "entry_price": entry_price
+        "entry_price": entry_price,
+        "leverage": leverage
     }
-    print(f"✅ 포지션 기록됨: {symbol} / {direction} / {entry_price}")
+    print(f"✅ 포지션 기록됨: {symbol} / {direction} / {entry_price} / {leverage}")
 
 def position_monitor_loop():
     while True:
@@ -82,19 +101,14 @@ def position_monitor_loop():
 🕒 현재 시각 (KST): {kst_now:%Y-%m-%d %H:%M}
 📈 진입 방향: {info['direction']}
 💰 진입가: ${info['entry_price']:.2f}
+🎯 레버리지: {info['leverage']}
 🚪 <b>최대 보유시간 도달 → 수동 청산 고려</b>"""
                 send_telegram(message)
                 del active_positions[symbol]
         time.sleep(60)
 
-def fetch_latest_price(symbol):
-    df = fetch_ohlcv(symbol, '1m')
-    if df is not None and not df.empty:
-        return df['close'].iloc[-1]
-    return None
-
 if __name__ == '__main__':
-    Thread(target=lambda: app.run(host='0.0.0.0', port=8080)).start()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=8080, threaded=True)).start()
     Thread(target=analysis_loop, daemon=True).start()
     Thread(target=start_economic_schedule, daemon=True).start()
     Thread(target=position_monitor_loop, daemon=True).start()
