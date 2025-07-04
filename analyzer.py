@@ -88,13 +88,14 @@ def recommend_action(score):
 # ====== 분석 실행 ======
 def analyze_symbol(symbol: str):
     print(f"🔍 분석 시작: {symbol}")
+    print(f"✅ fetch_ohlcv_all_timeframes 호출 시작: {symbol}")
     data = fetch_ohlcv_all_timeframes(symbol)
-    print(f"✅ 데이터 keys: {list(data.keys())}")
-    for tf, df in data.items():
-         print(f"🕒 {tf}: {len(df)} rows")
+    print(f"✅ data 결과: {type(data)}, keys={list(data.keys()) if data else 'None'}")
+    for tf, df in (data or {}).items():
+        print(f"🕒 {tf}: {len(df)} rows")
 
     if not data or len(data['15m']) < 100:
-        print(f"❌ 데이터 부족: {symbol}")
+        print(f"❌ 데이터 부족 또는 15m 봉 부족: {symbol}")
         return
 
     df15 = data['15m']
