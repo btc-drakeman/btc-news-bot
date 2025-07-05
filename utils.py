@@ -135,3 +135,14 @@ def check_multi_timeframe_alignment(trend_15m: list, trend_1h: list):
         trend_15m[0] in ["bull", "bear"]
     )
 
+# ✅ 고점(저항선) 돌파 여부 판단
+def check_resistance_breakout(df: pd.DataFrame, lookback: int = 20):
+    if len(df) < lookback + 1:
+        return False, None
+
+    recent_high = df['high'].iloc[-(lookback+1):-1].max()
+    current_price = df['close'].iloc[-1]
+
+    breakout = current_price > recent_high
+    return breakout, recent_high
+
