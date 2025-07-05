@@ -12,6 +12,7 @@ from utils import (
 
 from strategy import analyze_indicators
 from datetime import datetime
+import pytz
 
 def analyze_symbol(symbol: str):
     print(f"🔍 분석 시작: {symbol}")
@@ -55,26 +56,33 @@ def analyze_symbol(symbol: str):
         check_multi_timeframe_alignment(ema_15m, ema_1h)
     ])
 
-    # 신뢰도 등급
+        # 신뢰도 등급
     confidence = "❕ 약함"
     if consistency_ok and alignment_ok:
         confidence = "✅ 높음"
     elif consistency_ok or alignment_ok:
         confidence = "⚠️ 중간"
 
+    # ✅ 여기부터 교체
     # 최종 전략 판단
     final_action = "관망 (조건 미충족)"
-    if score >= 3.5 and consistency_ok and alignment_ok:
-        if rsi_15m[0] == 'bull':
+
+    if score >= 4.5:
+        final_action = "🟢 진입 강력 추천 (고점 돌파 대기 가능)"
+    elif score >= 3.5 and consistency_ok and alignment_ok:
+        if rsi_15m and rsi_15m[0] == 'bull':
             final_action = "📈 롱 진입 추천"
-        elif rsi_15m[0] == 'bear':
+        elif rsi_15m and rsi_15m[0] == 'bear':
             final_action = "📉 숏 진입 추천"
         else:
             final_action = "관망 (중립 추세)"
     elif score >= 3.5:
         final_action = "관망 (추세 불확실)"
 
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    KST = pytz.timezone('Asia/Seoul')
+    now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
+
     current_price = data['1m']['close'].iloc[-1]
 
     message = f"""📊 {symbol.upper()} 기술 분석 (MEXC)
@@ -93,6 +101,7 @@ def analyze_symbol(symbol: str):
 📌 다중 타임프레임 일치(15m ↔ 1h): {"✅" if alignment_ok else "❌"}
 📌 고점 돌파 여부: {breakout_str}
 📌 캔들 패턴(15m): {candle_pattern}
+
 📌 신호 신뢰도: {confidence}
 ▶️ 종합 분석 점수: {score}/5
 
