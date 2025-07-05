@@ -44,9 +44,11 @@ def detect_spike(symbol: str, df):
             messages.append(f"⚡ RSI 급반등 ({prev_rsi:.1f} → {current_rsi:.1f})")
 
     # 조건 2개 이상 충족 시 급등 전조 경고
+     # 조건 2개 이상 충족 시 급등 전조 경고
     if score >= 2:
+        details = '\n- '.join(messages)
         msg = f"""🚨 급등 전조 감지: {symbol.upper()}
-- {'\n- '.join(messages)}
+- {details}
 
 📌 강한 상승 가능성 → 관찰 또는 조기 진입 고려
 """
