@@ -5,8 +5,10 @@ from utils import (
     get_ema_trend,
     check_trend_consistency,
     check_multi_timeframe_alignment,
-    check_resistance_breakout  
+    check_resistance_breakout,
+    detect_candle_pattern
 )
+
 
 from strategy import analyze_indicators
 from datetime import datetime
@@ -29,6 +31,9 @@ def analyze_symbol(symbol: str):
     # 고점 돌파 여부 판단 (15분봉 기준)
     breakout_ok, recent_high = check_resistance_breakout(df_15m)
     breakout_str = f"{'✅' if breakout_ok else '❌'} 최근 고점 (${recent_high:,.2f}) {'돌파' if breakout_ok else '미돌파'}"
+
+    # ✅ 최근 캔들 패턴 판별 (15분봉)
+    candle_pattern = detect_candle_pattern(df_15m)
 
     rsi_15m = get_rsi_trend(df_15m)
     macd_15m = get_macd_trend(df_15m)
@@ -87,6 +92,7 @@ def analyze_symbol(symbol: str):
 📌 추세 일관성(15m): {"✅" if consistency_ok else "❌"}
 📌 다중 타임프레임 일치(15m ↔ 1h): {"✅" if alignment_ok else "❌"}
 📌 고점 돌파 여부: {breakout_str}
+📌 캔들 패턴(15m): {candle_pattern}
 📌 신호 신뢰도: {confidence}
 ▶️ 종합 분석 점수: {score}/5
 

@@ -146,3 +146,24 @@ def check_resistance_breakout(df: pd.DataFrame, lookback: int = 20):
     breakout = current_price > recent_high
     return breakout, recent_high
 
+# ✅ 캔들 패턴 분석 함수
+def detect_candle_pattern(df: pd.DataFrame):
+    if len(df) < 2:
+        return "N/A"
+
+    last = df.iloc[-1]
+    body = abs(last['close'] - last['open'])
+    range_total = last['high'] - last['low']
+
+    if range_total == 0:
+        return "N/A"
+
+    body_ratio = body / range_total
+
+    if body_ratio > 0.75:
+        return "📈 장대 양봉" if last['close'] > last['open'] else "📉 장대 음봉"
+    elif body_ratio < 0.2:
+        return "🕯️ 도지형"
+    else:
+        return "보통 캔들"
+
