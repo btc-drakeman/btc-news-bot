@@ -1,4 +1,4 @@
-# main.py - /buy SYMBOL 명령 처리 포함 + 급등 전조 감지 추가
+# main.py - /buy SYMBOL 명령 처리 포함 + 급등/급락 전조 감지 추가
 
 from flask import Flask, request
 from threading import Thread
@@ -7,8 +7,8 @@ from config import SYMBOLS
 from analyzer import analyze_symbol
 from notifier import send_telegram
 from tracker import set_entry_price
-from utils import get_current_price, fetch_ohlcv_all_timeframes  # ✅ fetch 추가
-from spike_detector import detect_spike  # ✅ 급등 감지 로직 추가
+from utils import get_current_price, fetch_ohlcv_all_timeframes
+from spike_detector import detect_spike, detect_crash  # ✅ 급락 감지도 추가
 
 import time
 
@@ -51,12 +51,16 @@ def analysis_loop():
             else:
                 print(f"⚠️ {symbol} 분석 실패 (데이터 부족)")
 
-            # ✅ 급등 전조 감지 (15분봉 기준)
+            # ✅ 급등/급락 전조 감지 (15분봉 기준)
             data = fetch_ohlcv_all_timeframes(symbol)
             if data and '15m' in data:
                 spike_msg = detect_spike(symbol, data['15m'])
                 if spike_msg:
                     send_telegram(spike_msg)
+
+                crash_msg = detect_crash(symbol, data['15m'])  # ✅ 급락 경고 추가
+                if crash_msg:
+                    send_telegram(crash_msg)
 
         time.sleep(900)  # 15분마다 반복
 
