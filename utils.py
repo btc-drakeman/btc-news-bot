@@ -117,3 +117,21 @@ def get_ema_trend(df: pd.DataFrame, short=12, long=26, length: int = 3):
         else:
             trend.append("neutral")
     return trend
+
+# ✅ 3봉 추세 일관성 체크 (모두 같은 방향인지)
+def check_trend_consistency(trend_list: list):
+    if not trend_list or len(trend_list) < 3:
+        return False
+    return len(set(trend_list)) == 1 and trend_list[0] in ["bull", "bear"]
+
+# ✅ 다중 타임프레임 추세 일치 확인
+def check_multi_timeframe_alignment(trend_15m: list, trend_1h: list):
+    if not trend_15m or not trend_1h:
+        return False
+    return (
+        len(set(trend_15m)) == 1 and
+        len(set(trend_1h)) == 1 and
+        trend_15m[0] == trend_1h[0] and
+        trend_15m[0] in ["bull", "bear"]
+    )
+

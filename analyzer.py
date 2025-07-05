@@ -1,4 +1,11 @@
-from utils import fetch_ohlcv_all_timeframes, get_rsi_trend, get_macd_trend, get_ema_trend
+from utils import (
+    fetch_ohlcv_all_timeframes,
+    get_rsi_trend,
+    get_macd_trend,
+    get_ema_trend,
+    check_trend_consistency,
+    check_multi_timeframe_alignment
+)
 from strategy import analyze_indicators
 from datetime import datetime
 
@@ -6,39 +13,55 @@ def analyze_symbol(symbol: str):
     print(f"🔍 분석 시작: {symbol}")
     data = fetch_ohlcv_all_timeframes(symbol)
 
-    if not data or '15m' not in data:
+    if not data or '15m' not in data or '30m' not in data:
         print(f"❌ 데이터 부족 또는 15m 봉 부족: {symbol}")
         return None
 
     # 지표별 점수 계산
     score, action, indicators = analyze_indicators(data)
 
-    # 추세 필터 (15분봉 기준)
+    # 추세 필터 (15분봉 + 30분봉 기준)
     df_15m = data['15m']
-    rsi_trend = get_rsi_trend(df_15m)
-    macd_trend = get_macd_trend(df_15m)
-    ema_trend = get_ema_trend(df_15m)
+    df_1h = data['30m']  # 30m * 2 = 1시간 대응
 
-    # 기본은 관망
-    final_action = "관망 (불확실한 추세)"
+    rsi_15m = get_rsi_trend(df_15m)
+    macd_15m = get_macd_trend(df_15m)
+    ema_15m = get_ema_trend(df_15m)
 
-    if all([rsi_trend, macd_trend, ema_trend]) and \
-       len(set(rsi_trend)) == 1 and \
-       len(set(macd_trend)) == 1 and \
-       len(set(ema_trend)) == 1 and \
-       rsi_trend[0] == macd_trend[0] == ema_trend[0]:
+    rsi_1h = get_rsi_trend(df_1h)
+    macd_1h = get_macd_trend(df_1h)
+    ema_1h = get_ema_trend(df_1h)
 
-        if score >= 3.5:
-            if rsi_trend[0] == 'bull':
-                final_action = "📈 롱 진입 추천"
-            elif rsi_trend[0] == 'bear':
-                final_action = "📉 숏 진입 추천"
-            else:
-                final_action = "관망 (중립 추세)"
+    consistency_ok = all([
+        check_trend_consistency(rsi_15m),
+        check_trend_consistency(macd_15m),
+        check_trend_consistency(ema_15m)
+    ])
+
+    alignment_ok = all([
+        check_multi_timeframe_alignment(rsi_15m, rsi_1h),
+        check_multi_timeframe_alignment(macd_15m, macd_1h),
+        check_multi_timeframe_alignment(ema_15m, ema_1h)
+    ])
+
+    # 신뢰도 등급
+    confidence = "❕ 약함"
+    if consistency_ok and alignment_ok:
+        confidence = "✅ 높음"
+    elif consistency_ok or alignment_ok:
+        confidence = "⚠️ 중간"
+
+    # 최종 전략 판단
+    final_action = "관망 (조건 미충족)"
+    if score >= 3.5 and consistency_ok and alignment_ok:
+        if rsi_15m[0] == 'bull':
+            final_action = "📈 롱 진입 추천"
+        elif rsi_15m[0] == 'bear':
+            final_action = "📉 숏 진입 추천"
         else:
-            final_action = "관망 (점수 부족)"
-    else:
-        final_action = "관망 (추세 불일치)"
+            final_action = "관망 (중립 추세)"
+    elif score >= 3.5:
+        final_action = "관망 (추세 불확실)"
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     current_price = data['1m']['close'].iloc[-1]
@@ -55,6 +78,9 @@ def analyze_symbol(symbol: str):
 📊 거래량: {indicators.get('Volume', 'N/A')}
 🕐 1시간봉 추세: {indicators.get('Trend_1h', 'N/A')}
 
+📌 추세 일관성(15m): {"✅" if consistency_ok else "❌"}
+📌 다중 타임프레임 일치(15m ↔ 1h): {"✅" if alignment_ok else "❌"}
+📌 신호 신뢰도: {confidence}
 ▶️ 종합 분석 점수: {score}/5
 
 📌 진입 전략 제안
