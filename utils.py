@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 import pandas_ta as ta
+from tracker import entry_price_dict, peak_price_dict
 
 # MEXC 현물 API 기반 OHLCV 가져오기
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
