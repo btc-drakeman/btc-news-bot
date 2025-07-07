@@ -109,6 +109,6 @@ def analyze_symbol(symbol: str):
 🔴 추천 액션: {final_action}
 """
 
-print(f"📊 [디버그] {symbol} 최종 점수: {score}, 액션: {final_action}")
+    print(f"📊 [디버그] {symbol} 최종 점수: {score}, 액션: {final_action}")
 
     return message
