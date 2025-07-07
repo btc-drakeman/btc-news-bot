@@ -2,7 +2,7 @@
 
 # ✅ 텔레그램 봇 설정
 BOT_TOKEN = '7213273799:AAEi6KtkzHqwKkrsQgaxSgKSnRWbXM70gUA'
-USER_IDS = ['7505401062']
+USER_IDS = ['7505401062', '7576776181']
 API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
 # ✅ 분석 대상 심볼 (MEXC 선물 표기 기준)

@@ -1,5 +1,6 @@
 from utils import (
     fetch_ohlcv_all_timeframes,
+    fetch_recent_ohlcv,
     get_rsi_trend,
     get_macd_trend,
     get_ema_trend,
@@ -10,6 +11,7 @@ from utils import (
 )
 
 from strategy import analyze_indicators
+from strategy_backtest import get_optimal_hold_period
 from datetime import datetime
 import pytz
 
@@ -61,26 +63,22 @@ def analyze_symbol(symbol: str):
     now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
     current_price = data['1m']['close'].iloc[-1]
 
-    # 전략 실행 정보: 현재 방향만 표시 (long or short)
-    hold_map = {
-        'BTCUSDT': {'long': 13, 'short': 13, 'warn_short': True},
-        'ETHUSDT': {'long': 14, 'short': 13, 'warn_short': True},
-        'XRPUSDT': {'long': 13, 'short': 13, 'warn_long': True},
-        'SOLUSDT': {'long': 13, 'short': 13, 'warn_long': True}
-    }
-    symbol_cfg = hold_map.get(symbol.upper(), {'long': 13, 'short': 13})
-    hold_bars = symbol_cfg.get(direction, 13)
+    # ✅ 실시간 최적 보유시간 계산
+    try:
+        backtest_df = fetch_recent_ohlcv(symbol, interval='15m', limit=672)
+        hold_bars = get_optimal_hold_period(backtest_df, direction)
+    except Exception as e:
+        print(f"❌ 최적 보유시간 계산 실패: {e}")
+        hold_bars = 13  # fallback 기본값
+
     entry = current_price
     tp = round(entry * (1.04 if direction == 'long' else 0.96), 2)
     sl = round(entry * (0.98 if direction == 'long' else 1.02), 2)
     ret = round(abs(tp - entry) / entry * 20 * 100, 2)
-    warn = ''
-    if symbol_cfg.get('warn_' + direction, False):
-        warn = "⚠️ [주의] 과거 평균 수익률이 낮았던 전략입니다.\n"
 
     strategy_block = f"""
 📌 전략 실행 정보 ({'롱' if direction == 'long' else '숏'} 시나리오)
-{warn}📈 예상 보유 시간: {hold_bars}봉 (약 {round(hold_bars * 15 / 60, 2)}시간)
+📈 예상 보유 시간: {hold_bars}봉 (약 {round(hold_bars * 15 / 60, 2)}시간)
 💵 진입가: ${entry:,.2f}
 🎯 익절가: ${tp:,.2f} (+4%)
 🛑 손절가: ${sl:,.2f} (-2%)

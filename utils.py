@@ -3,7 +3,7 @@ import pandas as pd
 import pandas_ta as ta
 from tracker import entry_price_dict, peak_price_dict
 
-# MEXC 현물 API 기반 OHLCV 가져오기
+# ✅ MEXC 현물 API 기반 OHLCV 가져오기 (기존 분석용)
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
     url = "https://api.mexc.com/api/v3/klines"
     params = {
@@ -19,12 +19,9 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         response.raise_for_status()
 
         raw = response.json()
-
-        # 현무 데이터는 8개 컬럼만 존재함
         df = pd.DataFrame(raw, columns=[
             "timestamp", "open", "high", "low", "close", "volume", "_1", "_2"
         ])
-
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
         df.set_index("timestamp", inplace=True)
         df = df[["open", "high", "low", "close", "volume"]].astype(float)
@@ -34,10 +31,9 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         print(f"❌ OHLCV 요청 실패 [{symbol} {interval}]: {e}")
         return None
 
-
-# 4개 타임프레임 모두 가져오기 (1h → 30m 변경)
+# ✅ 실시간 분석용 (1m, 5m, 15m, 30m)
 def fetch_ohlcv_all_timeframes(symbol: str):
-    intervals = ['1m', '5m', '15m', '30m']  # 1h 제거, 30m 사용
+    intervals = ['1m', '5m', '15m', '30m']
     result = {}
     for interval in intervals:
         df = fetch_ohlcv(symbol, interval)
@@ -45,6 +41,32 @@ def fetch_ohlcv_all_timeframes(symbol: str):
             result[interval] = df
     return result
 
+# ✅ 백테스트 전용 15분봉 최근 7일치 (672개)
+def fetch_recent_ohlcv(symbol: str, interval: str = '15m', limit: int = 672):
+    url = "https://api.mexc.com/api/v3/klines"
+    params = {
+        "symbol": symbol.upper(),
+        "interval": interval,
+        "limit": limit
+    }
+
+    try:
+        print(f"📊 백테스트용 OHLCV 요청 → {symbol} @ {interval} ({limit}개)")
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+
+        raw = response.json()
+        df = pd.DataFrame(raw, columns=[
+            "timestamp", "open", "high", "low", "close", "volume", "_1", "_2"
+        ])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit='ms')
+        df.set_index("timestamp", inplace=True)
+        df = df[["open", "high", "low", "close", "volume"]].astype(float)
+        return df
+
+    except Exception as e:
+        print(f"❌ [fetch_recent_ohlcv] 실패: {e}")
+        return None
 
 # 실시간 가격 획득 (1m 보조)
 def get_current_price(symbol: str):
@@ -55,19 +77,19 @@ def get_current_price(symbol: str):
         data = response.json()
         if not data:
             return None
-        close_price = float(data[0][4])  # 종가
+        close_price = float(data[0][4])
         return close_price
     except Exception as e:
         print(f"[get_current_price] 오류: {e}")
         return None
 
+# --- 아래는 기존 추세 분석 함수들 (생략 없이 유지됨) ---
 
 # ✅ RSI 추세 판별 함수
 def get_rsi_trend(df: pd.DataFrame, period: int = 14, length: int = 3):
     rsi = ta.rsi(df['close'], length=period)
     if rsi is None or len(rsi.dropna()) < length:
         return None
-
     trend = []
     for val in rsi.dropna()[-length:]:
         if val > 55:
@@ -78,17 +100,14 @@ def get_rsi_trend(df: pd.DataFrame, period: int = 14, length: int = 3):
             trend.append("neutral")
     return trend
 
-
 # ✅ MACD 추세 판별 함수
 def get_macd_trend(df: pd.DataFrame, length: int = 3):
     macd = ta.macd(df['close'])
     if macd is None or macd.shape[0] < length:
         return None
-
     hist = macd['MACDh_12_26_9'].dropna()
     if len(hist) < length:
         return None
-
     trend = []
     for val in hist[-length:]:
         if val > 0:
@@ -99,15 +118,12 @@ def get_macd_trend(df: pd.DataFrame, length: int = 3):
             trend.append("neutral")
     return trend
 
-
 # ✅ EMA 추세 판별 함수
 def get_ema_trend(df: pd.DataFrame, short=12, long=26, length: int = 3):
     ema_short = ta.ema(df['close'], length=short)
     ema_long = ta.ema(df['close'], length=long)
-
     if ema_short is None or ema_long is None:
         return None
-
     trend = []
     for s, l in zip(ema_short[-length:], ema_long[-length:]):
         if s > l:
@@ -139,10 +155,8 @@ def check_multi_timeframe_alignment(trend_15m: list, trend_1h: list):
 def check_resistance_breakout(df: pd.DataFrame, lookback: int = 20):
     if len(df) < lookback + 1:
         return False, None
-
     recent_high = df['high'].iloc[-(lookback+1):-1].max()
     current_price = df['close'].iloc[-1]
-
     breakout = current_price > recent_high
     return breakout, recent_high
 
@@ -150,20 +164,15 @@ def check_resistance_breakout(df: pd.DataFrame, lookback: int = 20):
 def detect_candle_pattern(df: pd.DataFrame):
     if len(df) < 2:
         return "N/A"
-
     last = df.iloc[-1]
     body = abs(last['close'] - last['open'])
     range_total = last['high'] - last['low']
-
     if range_total == 0:
         return "N/A"
-
     body_ratio = body / range_total
-
     if body_ratio > 0.75:
         return "📈 장대 양봉" if last['close'] > last['open'] else "📉 장대 음봉"
     elif body_ratio < 0.2:
         return "🕯️ 도지형"
     else:
         return "보통 캔들"
-
