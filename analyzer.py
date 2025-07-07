@@ -21,18 +21,14 @@ def analyze_symbol(symbol: str):
         print(f"❌ 데이터 부족 또는 15m 봉 부족: {symbol}")
         return None
 
-    # 지표별 점수 계산
     score, action, direction, indicators = analyze_indicators(data)
 
-    # 추세 필터 (15분봉 + 30분봉 기준)
     df_15m = data['15m']
     df_1h = data['30m']
 
-    # 고점 돌파 여부 판단 (15분봉 기준)
     breakout_ok, recent_high = check_resistance_breakout(df_15m)
     breakout_str = f"{'✅' if breakout_ok else '❌'} 최근 고점 (${recent_high:,.2f}) {'돌파' if breakout_ok else '미돌파'}"
 
-    # 캔들 패턴 판별 (15분봉)
     candle_pattern = detect_candle_pattern(df_15m)
 
     rsi_15m = get_rsi_trend(df_15m)
@@ -55,23 +51,44 @@ def analyze_symbol(symbol: str):
         check_multi_timeframe_alignment(ema_15m, ema_1h)
     ])
 
-    # 신뢰도 등급
     confidence = "❕ 약함"
     if consistency_ok and alignment_ok:
         confidence = "✅ 높음"
     elif consistency_ok or alignment_ok:
         confidence = "⚠️ 중간"
 
-    # 최종 전략 메시지 구성
-    if direction == 'long':
-        final_action = "📈 롱 진입 시그널"
-    else:
-        final_action = "📉 숏 진입 시그널"
-
     KST = pytz.timezone('Asia/Seoul')
     now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
-
     current_price = data['1m']['close'].iloc[-1]
+
+    # 전략 실행 정보 (롱/숏 모두 출력)
+    hold_map = {
+        'BTCUSDT': {'long': 13, 'short': 13, 'warn_short': True},
+        'ETHUSDT': {'long': 14, 'short': 13, 'warn_short': True},
+        'XRPUSDT': {'long': 13, 'short': 13, 'warn_long': True},
+        'SOLUSDT': {'long': 13, 'short': 13, 'warn_long': True}
+    }
+    symbol_cfg = hold_map.get(symbol.upper(), {'long': 13, 'short': 13})
+
+    def format_strategy_text(mode):
+        entry = current_price
+        hold_bars = symbol_cfg.get(mode, 13)
+        tp = round(entry * (1.04 if mode == 'long' else 0.96), 2)
+        sl = round(entry * (0.98 if mode == 'long' else 1.02), 2)
+        ret = round(abs(tp - entry) / entry * 20 * 100, 2)
+        warn = ''
+        if symbol_cfg.get('warn_' + mode, False):
+            warn = "⚠️ [주의] 과거 평균 수익률이 낮았던 전략입니다.\n"
+        return f"""
+📌 전략 실행 정보 ({'롱' if mode == 'long' else '숏'} 시나리오)
+{warn}📈 예상 보유 시간: {hold_bars}봉 (약 {round(hold_bars * 15 / 60, 2)}시간)
+💵 진입가: ${entry:,.2f}
+🎯 익절가: ${tp:,.2f} (+4%)
+🛑 손절가: ${sl:,.2f} (-2%)
+📊 예상 수익률(20x): +{ret}%"""
+
+    long_block = format_strategy_text('long')
+    short_block = format_strategy_text('short')
 
     message = f"""📊 {symbol.upper()} 기술 분석 (MEXC)
 🕒 {now}
@@ -93,9 +110,10 @@ def analyze_symbol(symbol: str):
 📌 신호 신뢰도: {confidence}
 ▶️ 종합 분석 점수: {score}/5
 
-📌 진입 전략 제안
-🔴 추천 액션: {final_action}
+{long_block}
+
+{short_block}
 """
 
-    print(f"📊 [디버그] {symbol} 최종 점수: {score}, 액션: {final_action}")
+    print(f"📊 [디버그] {symbol} 최종 점수: {score}, 액션: {action} → 방향: {direction}")
     return message
