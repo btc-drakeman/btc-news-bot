@@ -61,7 +61,7 @@ def analyze_symbol(symbol: str):
     now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
     current_price = data['1m']['close'].iloc[-1]
 
-    # 전략 실행 정보 (롱/숏 모두 출력)
+    # 전략 실행 정보: 현재 방향만 표시 (long or short)
     hold_map = {
         'BTCUSDT': {'long': 13, 'short': 13, 'warn_short': True},
         'ETHUSDT': {'long': 14, 'short': 13, 'warn_short': True},
@@ -69,26 +69,24 @@ def analyze_symbol(symbol: str):
         'SOLUSDT': {'long': 13, 'short': 13, 'warn_long': True}
     }
     symbol_cfg = hold_map.get(symbol.upper(), {'long': 13, 'short': 13})
+    hold_bars = symbol_cfg.get(direction, 13)
+    entry = current_price
+    tp = round(entry * (1.04 if direction == 'long' else 0.96), 2)
+    sl = round(entry * (0.98 if direction == 'long' else 1.02), 2)
+    ret = round(abs(tp - entry) / entry * 20 * 100, 2)
+    warn = ''
+    if symbol_cfg.get('warn_' + direction, False):
+        warn = "⚠️ [주의] 과거 평균 수익률이 낮았던 전략입니다.\n"
 
-    def format_strategy_text(mode):
-        entry = current_price
-        hold_bars = symbol_cfg.get(mode, 13)
-        tp = round(entry * (1.04 if mode == 'long' else 0.96), 2)
-        sl = round(entry * (0.98 if mode == 'long' else 1.02), 2)
-        ret = round(abs(tp - entry) / entry * 20 * 100, 2)
-        warn = ''
-        if symbol_cfg.get('warn_' + mode, False):
-            warn = "⚠️ [주의] 과거 평균 수익률이 낮았던 전략입니다.\n"
-        return f"""
-📌 전략 실행 정보 ({'롱' if mode == 'long' else '숏'} 시나리오)
+    strategy_block = f"""
+📌 전략 실행 정보 ({'롱' if direction == 'long' else '숏'} 시나리오)
 {warn}📈 예상 보유 시간: {hold_bars}봉 (약 {round(hold_bars * 15 / 60, 2)}시간)
 💵 진입가: ${entry:,.2f}
 🎯 익절가: ${tp:,.2f} (+4%)
 🛑 손절가: ${sl:,.2f} (-2%)
 📊 예상 수익률(20x): +{ret}%"""
 
-    long_block = format_strategy_text('long')
-    short_block = format_strategy_text('short')
+    final_action = "📈 롱 진입 시그널" if direction == 'long' else "📉 숏 진입 시그널"
 
     message = f"""📊 {symbol.upper()} 기술 분석 (MEXC)
 🕒 {now}
@@ -110,9 +108,9 @@ def analyze_symbol(symbol: str):
 📌 신호 신뢰도: {confidence}
 ▶️ 종합 분석 점수: {score}/5
 
-{long_block}
+🔴 추천 액션: {final_action}
 
-{short_block}
+{strategy_block}
 """
 
     print(f"📊 [디버그] {symbol} 최종 점수: {score}, 액션: {action} → 방향: {direction}")
