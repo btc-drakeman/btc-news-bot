@@ -9,7 +9,6 @@ from utils import (
     detect_candle_pattern
 )
 
-
 from strategy import analyze_indicators
 from datetime import datetime
 import pytz
@@ -56,17 +55,14 @@ def analyze_symbol(symbol: str):
         check_multi_timeframe_alignment(ema_15m, ema_1h)
     ])
 
-        # 신뢰도 등급
+    # 신뢰도 등급
     confidence = "❕ 약함"
     if consistency_ok and alignment_ok:
         confidence = "✅ 높음"
     elif consistency_ok or alignment_ok:
         confidence = "⚠️ 중간"
 
-    # ✅ 여기부터 교체
-    # 최종 전략 판단
-    final_action = "관망 (조건 미충족)"
-
+    # ✅ 최종 전략 판단 (조건 상관없이 항상 메시지 생성)
     if score >= 4.5:
         final_action = "🟢 진입 강력 추천 (고점 돌파 대기 가능)"
     elif score >= 3.5 and consistency_ok and alignment_ok:
@@ -78,7 +74,8 @@ def analyze_symbol(symbol: str):
             final_action = "관망 (중립 추세)"
     elif score >= 3.5:
         final_action = "관망 (추세 불확실)"
-
+    else:
+        final_action = "관망 (조건 미충족)"  # ✅ 조건 미충족이어도 메시지 생성
 
     KST = pytz.timezone('Asia/Seoul')
     now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
@@ -110,5 +107,4 @@ def analyze_symbol(symbol: str):
 """
 
     print(f"📊 [디버그] {symbol} 최종 점수: {score}, 액션: {final_action}")
-
     return message
