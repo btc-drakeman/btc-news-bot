@@ -14,7 +14,7 @@ from datetime import datetime
 import pytz
 
 def analyze_symbol(symbol: str):
-    print(f"🔍 분석 시작: {symbol}")
+    print(f"\U0001f50d 분석 시작: {symbol}")
     data = fetch_ohlcv_all_timeframes(symbol)
 
     if not data or '15m' not in data or '30m' not in data:
@@ -22,17 +22,17 @@ def analyze_symbol(symbol: str):
         return None
 
     # 지표별 점수 계산
-    score, action, indicators = analyze_indicators(data)
+    score, action, direction, indicators = analyze_indicators(data)
 
     # 추세 필터 (15분봉 + 30분봉 기준)
     df_15m = data['15m']
-    df_1h = data['30m']  # 30m * 2 = 1시간 대응
+    df_1h = data['30m']
 
     # 고점 돌파 여부 판단 (15분봉 기준)
     breakout_ok, recent_high = check_resistance_breakout(df_15m)
     breakout_str = f"{'✅' if breakout_ok else '❌'} 최근 고점 (${recent_high:,.2f}) {'돌파' if breakout_ok else '미돌파'}"
 
-    # ✅ 최근 캔들 패턴 판별 (15분봉)
+    # 캔들 패턴 판별 (15분봉)
     candle_pattern = detect_candle_pattern(df_15m)
 
     rsi_15m = get_rsi_trend(df_15m)
@@ -62,20 +62,11 @@ def analyze_symbol(symbol: str):
     elif consistency_ok or alignment_ok:
         confidence = "⚠️ 중간"
 
-    # ✅ 최종 전략 판단 (조건 상관없이 항상 메시지 생성)
-    if score >= 4.5:
-        final_action = "🟢 진입 강력 추천 (고점 돌파 대기 가능)"
-    elif score >= 3.5 and consistency_ok and alignment_ok:
-        if rsi_15m and rsi_15m[0] == 'bull':
-            final_action = "📈 롱 진입 추천"
-        elif rsi_15m and rsi_15m[0] == 'bear':
-            final_action = "📉 숏 진입 추천"
-        else:
-            final_action = "관망 (중립 추세)"
-    elif score >= 3.5:
-        final_action = "관망 (추세 불확실)"
+    # 최종 전략 메시지 구성
+    if direction == 'long':
+        final_action = "📈 롱 진입 시그널"
     else:
-        final_action = "관망 (조건 미충족)"  # ✅ 조건 미충족이어도 메시지 생성
+        final_action = "📉 숏 진입 시그널"
 
     KST = pytz.timezone('Asia/Seoul')
     now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
@@ -94,8 +85,8 @@ def analyze_symbol(symbol: str):
 📊 거래량: {indicators.get('Volume', 'N/A')}
 🕐 1시간봉 추세: {indicators.get('Trend_1h', 'N/A')}
 
-📌 추세 일관성(15m): {"✅" if consistency_ok else "❌"}
-📌 다중 타임프레임 일치(15m ↔ 1h): {"✅" if alignment_ok else "❌"}
+📌 추세 일관성(15m): {'✅' if consistency_ok else '❌'}
+📌 다중 타임프레임 일치(15m ↔ 1h): {'✅' if alignment_ok else '❌'}
 📌 고점 돌파 여부: {breakout_str}
 📌 캔들 패턴(15m): {candle_pattern}
 

@@ -77,7 +77,6 @@ def analyze_indicators(data_dict: dict):
         boll_text, boll_score = analyze_bollinger(df)
         vol_text, vol_score = analyze_volume(df)
 
-        # 메시지에 표시할 지표 값은 '1m' 타임프레임 기준으로만 수집
         if tf == '1m':
             indicators_result = {
                 'RSI': rsi_text,
@@ -86,7 +85,7 @@ def analyze_indicators(data_dict: dict):
                 'EMA_Slope': f"{df['close'].ewm(span=20).mean().diff().iloc[-1]:.5f}",
                 'Bollinger': boll_text,
                 'Volume': vol_text,
-                'Trend_1h': '분석 예정'  # 1h 추세는 따로 분석 코드가 있다면 여기에 추가
+                'Trend_1h': '분석 예정'
             }
 
         score = (
@@ -101,13 +100,11 @@ def analyze_indicators(data_dict: dict):
 
     final_score = round(total_score / len(data_dict), 2)
 
-    if final_score >= 3.5:
-        action = '매수 강력 추천'
-    elif final_score >= 2.5:
-        action = '관심 필요, 긍정 흐름'
-    elif final_score >= 1.5:
-        action = '보류 또는 조정'
+    if final_score >= 3.0:
+        action = '롱 진입 시그널'
+        direction = 'long'
     else:
-        action = '매도 또는 비관적 흐름'
+        action = '숏 진입 시그널'
+        direction = 'short'
 
-    return final_score, action, indicators_result
+    return final_score, action, direction, indicators_result
