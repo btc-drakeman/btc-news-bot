@@ -15,8 +15,9 @@ def generate_signal_message(
     breakout: bool,
     candle_signal: str,
     reliability: str,
-    tp_ratio: float = None,  # ✅ 익절 비율 추가
-    sl_ratio: float = None   # ✅ 손절 비율 추가
+    tp_ratio: float = None,   # 익절 비율
+    sl_ratio: float = None,   # 손절 비율
+    avg_bars: float = None    # ✅ 평균 보유봉 수 (사용 안해도 받기만 하면 됨)
 ):
     entry_low, entry_high = entry_price
 
