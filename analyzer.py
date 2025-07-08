@@ -20,7 +20,7 @@ def analyze_symbol(symbol: str):
     df = df.set_index('timestamp')
 
     try:
-        # 롱 전략
+        # 롱 전략 점수 계산
         latest_i = len(df) - 2
         should_enter, score = should_enter_v6(latest_i, df)
         if should_enter:
@@ -45,9 +45,9 @@ def analyze_symbol(symbol: str):
                 action='진입',
                 score=score,
                 direction="long",
-                entry_price=(entry_price * 0.995, entry_price * 1.005),
-                stop_loss=entry_price * (1 - sl_ratio),
-                take_profit=entry_price * (1 + tp_ratio),
+                entry_price=(round(entry_price * 0.995, 4), round(entry_price * 1.005, 4)),
+                stop_loss=round(entry_price * (1 - sl_ratio), 4),
+                take_profit=round(entry_price * (1 + tp_ratio), 4),
                 expected_return=expected_return,
                 expected_hold=avg_bars,
                 consistency=True,
@@ -58,33 +58,34 @@ def analyze_symbol(symbol: str):
             )
             return message
 
-        # 숏 전략은 무조건 메시지 생성
+        # 숏 전략 점수 계산
         score, action, direction, indicators = analyze_indicators_short(data)
-        entry_price = df['close'].iloc[-1]
-        expected_return = -2.1
-        tp_ratio = 0.56
-        sl_ratio = 0.18
-        avg_bars = 6
+        if score >= 2.1 and indicators['RSI'] in ['과매수', '하락 중'] and indicators['MACD'] in ['하락 강화', '약한 하락']:
+            entry_price = df['close'].iloc[-1]
+            expected_return = -2.1
+            tp_ratio = 0.02
+            sl_ratio = 0.01
+            avg_bars = 6
 
-        message = generate_signal_message(
-            symbol=symbol,
-            current_price=entry_price,
-            indicators=indicators,
-            action='진입',
-            score=score,
-            direction="short",
-            entry_price=(entry_price * 0.995, entry_price * 1.005),
-            stop_loss=entry_price * (1 + sl_ratio),
-            take_profit=entry_price * (1 - tp_ratio),
-            expected_return=expected_return,
-            expected_hold=avg_bars,
-            consistency=True,
-            alignment=False,
-            breakout=False,
-            candle_signal='하락 반전형',
-            reliability='높음' if score >= 2.1 else '낮음'
-        )
-        return message
+            message = generate_signal_message(
+                symbol=symbol,
+                current_price=entry_price,
+                indicators=indicators,
+                action='진입',
+                score=score,
+                direction="short",
+                entry_price=(round(entry_price * 0.995, 4), round(entry_price * 1.005, 4)),
+                stop_loss=round(entry_price * (1 + sl_ratio), 4),
+                take_profit=round(entry_price * (1 - tp_ratio), 4),
+                expected_return=expected_return,
+                expected_hold=avg_bars,
+                consistency=True,
+                alignment=False,
+                breakout=False,
+                candle_signal='하락 반전형',
+                reliability='중간'
+            )
+            return message
 
     except Exception as e:
         print(f"❌ 분석 오류: {e}")
