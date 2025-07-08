@@ -1,37 +1,53 @@
-def generate_signal_message(symbol, current_price, rsi, macd, ema, ema_slope, bollinger, volume,
-                            trend_consistency, timeframe_alignment, breakout_status, candle_pattern,
-                            confidence, score, action, entry_low, entry_high, stop_loss, take_profit,
-                            hold_bars, avg_return, avg_hold_bars, is_long=True):
-    direction_emoji = "📈" if is_long else "📉"
-    action_text = f"{direction_emoji} {'롱' if is_long else '숏'} 진입 시그널"
-    scenario_text = f"{'롱' if is_long else '숏'} 시나리오"
+def generate_signal_message(
+    symbol: str,
+    current_price: float,
+    indicators: dict,
+    action: str,
+    score: float,
+    direction: str,
+    entry_price: tuple,
+    stop_loss: float,
+    take_profit: float,
+    expected_return: float,
+    expected_hold: float,
+    consistency: bool,
+    alignment: bool,
+    breakout: bool,
+    candle_signal: str,
+    reliability: str
+):
+    entry_low, entry_high = entry_price
 
-    return f"""📊 {symbol} 기술 분석 (MEXC)
-🕒 2025-07-08 13:00
-💰 현재가: ${current_price:,.2f}
+    icon_consistency = "🧭"
+    icon_alignment = "📐"
+    icon_breakout = "📌"
+    icon_candle = "🕯️"
+    icon_reliability = "🔎"
 
-⚖️ RSI: {rsi}
-📊 MACD: {macd}
-📐 EMA: {ema}
-📐 EMA 기울기: {ema_slope}
-📎 Bollinger: {bollinger}
-📊 거래량: {volume}
+    lines = [
+        f"📊 <b>{symbol}</b> 기술 분석 (MEXC)",
+        f"🕒 {indicators['timestamp']}",
+        f"💰 현재가: ${current_price:,.2f}\n",
+        f"⚖️ RSI: {indicators['RSI']}",
+        f"📊 MACD: {indicators['MACD']}",
+        f"📐 EMA: {indicators['EMA']}",
+        f"📐 EMA 기울기: {indicators['EMA Slope']}",
+        f"📎 Bollinger: {indicators['Bollinger']}",
+        f"📊 거래량: {indicators['Volume']}\n",
+        f"{icon_consistency} 추세 일관성(15m): {'✅' if consistency else '❌'}",
+        f"{icon_alignment} 다중 타임프레임 일치(15m ↔ 1h): {'✅' if alignment else '❌'}",
+        f"{icon_breakout} 고점 돌파 여부: {'✅' if breakout else '❌'}",
+        f"{icon_candle} 캔들 패턴(15m): {candle_signal}",
+        f"{icon_reliability} 신호 신뢰도: {reliability}",
+        f"▶️ 종합 분석 점수: {score:.2f}/5\n",
+        f"{'🟢 롱 진입 시그널' if direction == 'long' else '🔴 숏 진입 시그널'}",
+        "",
+        f"📌 전략 실행 정보 ({'롱' if direction == 'long' else '숏'} 시나리오)",
+        f"⏱️ 예상 보유 시간: {expected_hold:.1f}봉",
+        f"💵 진입가: ${entry_low:,.2f} ~ ${entry_high:,.2f}",
+        f"🎯 익절가: ${take_profit:,.2f}",
+        f"🛑 손절가: ${stop_loss:,.2f}",
+        f"📈 예상 수익률(20x): {expected_return:+.2f}%"
+    ]
 
-🧭 추세 일관성(15m): {trend_consistency}
-🔗 다중 타임프레임 일치(15m ↔ 1h): {timeframe_alignment}
-⛳ 고점 돌파 여부: {breakout_status}
-🕯️ 캔들 패턴(15m): {candle_pattern}
-🧠 신호 신뢰도: {confidence}
-▶️ 종합 분석 점수: {score:.2f}/5
-
-🔴 추천 액션: {action_text}
-
-📌 전략 실행 정보 ({scenario_text})
-📈 예상 보유 시간: {hold_bars}봉 (약 {hold_bars * 0.25:.2f}시간)
-💵 진입가: ${entry_low:,.2f} ~ ${entry_high:,.2f}
-🎯 익절가: ${take_profit:,.2f}
-🛑 손절가: ${stop_loss:,.2f}
-
-📊 과거 유사 조건 수익 예측
-📈 평균 수익률: {avg_return:+.2f}%
-🕒 평균 보유 시간: {avg_hold_bars:.1f}봉"""
+    return "\n".join(lines)
