@@ -62,7 +62,7 @@ def analyze_symbol(symbol: str):
         if consistency_ok and alignment_ok:
             confidence = "✅ 높음"
         elif consistency_ok or alignment_ok:
-            confidence = ⚠️ 중간"
+            confidence = "⚠️ 중간"
 
         KST = pytz.timezone('Asia/Seoul')
         now = datetime.now(KST).strftime('%Y-%m-%d %H:%M:%S')
