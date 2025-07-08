@@ -44,25 +44,43 @@ def analysis_loop():
         for symbol in SYMBOLS:
             print(f"🔀 루프 진입: {symbol}")
 
-            # ✅ 기존 기술 분석 수행
-            result = analyze_symbol(symbol)
-            if result:
-                send_telegram(result)
-            else:
-                print(f"⚠️ {symbol} 분석 실패 (데이터 부족)")
+            try:
+                # ✅ 기술 분석 수행
+                result = analyze_symbol(symbol)
+                if result:
+                    try:
+                        send_telegram(result)
+                    except Exception as e:
+                        print(f"❌ Telegram 전송 실패: {e}")
+                else:
+                    print(f"⚠️ {symbol} 분석 실패 (데이터 부족)")
+            except Exception as e:
+                print(f"❌ 분석 중 오류 발생 ({symbol}): {e}")
 
-            # ✅ 급등/급락 전조 감지 (15분봉 기준)
-            data = fetch_ohlcv_all_timeframes(symbol)
-            if data and '15m' in data:
-                spike_msg = detect_spike(symbol, data['15m'])
-                if spike_msg:
-                    send_telegram(spike_msg)
+            try:
+                # ✅ 급등/급락 전조 감지
+                data = fetch_ohlcv_all_timeframes(symbol)
+                if data and '15m' in data:
+                    try:
+                        spike_msg = detect_spike(symbol, data['15m'])
+                        if spike_msg:
+                            send_telegram(spike_msg)
+                    except Exception as e:
+                        print(f"❌ 급등 감지 실패: {e}")
 
-                crash_msg = detect_crash(symbol, data['15m'])  # ✅ 급락 경고 추가
-                if crash_msg:
-                    send_telegram(crash_msg)
+                    try:
+                        crash_msg = detect_crash(symbol, data['15m'])
+                        if crash_msg:
+                            send_telegram(crash_msg)
+                    except Exception as e:
+                        print(f"❌ 급락 감지 실패: {e}")
+                else:
+                    print(f"⚠️ {symbol} 15분봉 데이터 부족으로 감지 생략")
+            except Exception as e:
+                print(f"❌ 감지 루틴 실패 ({symbol}): {e}")
 
         time.sleep(900)  # 15분마다 반복
+
 
 if __name__ == '__main__':
     print("🔍 분석 시작")

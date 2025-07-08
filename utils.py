@@ -19,6 +19,10 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 300):
         response.raise_for_status()
 
         raw = response.json()
+        if not raw:
+            print(f"⚠️ 응답 데이터 없음: {symbol} @ {interval}")
+            return None
+
         df = pd.DataFrame(raw, columns=[
             "timestamp", "open", "high", "low", "close", "volume", "_1", "_2"
         ])
@@ -36,9 +40,12 @@ def fetch_ohlcv_all_timeframes(symbol: str):
     intervals = ['1m', '5m', '15m', '30m']
     result = {}
     for interval in intervals:
-        df = fetch_ohlcv(symbol, interval)
-        if df is not None and not df.empty:
-            result[interval] = df
+        try:
+            df = fetch_ohlcv(symbol, interval)
+            if df is not None and not df.empty:
+                result[interval] = df
+        except Exception as e:
+            print(f"❌ [fetch_ohlcv_all_timeframes] {symbol}-{interval} 실패: {e}")
     return result
 
 # ✅ 백테스트 전용 15분봉 최근 7일치 (672개)
@@ -56,6 +63,10 @@ def fetch_recent_ohlcv(symbol: str, interval: str = '15m', limit: int = 672):
         response.raise_for_status()
 
         raw = response.json()
+        if not raw:
+            print(f"⚠️ 백테스트용 응답 없음: {symbol} {interval}")
+            return None
+
         df = pd.DataFrame(raw, columns=[
             "timestamp", "open", "high", "low", "close", "volume", "_1", "_2"
         ])
@@ -68,19 +79,20 @@ def fetch_recent_ohlcv(symbol: str, interval: str = '15m', limit: int = 672):
         print(f"❌ [fetch_recent_ohlcv] 실패: {e}")
         return None
 
-# 실시간 가격 획득 (1m 보조)
+# ✅ 실시간 가격 획득 (1m 보조)
 def get_current_price(symbol: str):
     try:
         url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=1m&limit=1"
-        response = requests.get(url)
+        response = requests.get(url, timeout=5)
         response.raise_for_status()
         data = response.json()
-        if not data:
+        if not data or len(data[0]) < 5:
+            print(f"⚠️ [get_current_price] 응답 이상: {data}")
             return None
         close_price = float(data[0][4])
         return close_price
     except Exception as e:
-        print(f"[get_current_price] 오류: {e}")
+        print(f"❌ [get_current_price] 오류: {e}")
         return None
 
 # --- 아래는 기존 추세 분석 함수들 (생략 없이 유지됨) ---
