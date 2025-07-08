@@ -27,15 +27,34 @@ def analyze_symbol(symbol: str):
             entry_price = df['close'].iloc[latest_i]
             result_df = run_backtest(df)
             expected_return, tp_ratio, sl_ratio, avg_bars = predict_from_condition(result_df)
+
+            indicators = {
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'RSI': '상승 중',
+                'MACD': '중립',
+                'EMA': '접근 중',
+                'EMA Slope': '-0.01',
+                'Bollinger': '중심선 근처',
+                'Volume': '보통'
+            }
+
             message = generate_signal_message(
                 symbol=symbol,
-                entry_price=entry_price,
+                current_price=entry_price,
+                indicators=indicators,
+                action='진입',
                 score=score,
                 direction="long",
+                entry_price=(entry_price * 0.995, entry_price * 1.005),
+                stop_loss=entry_price * (1 - sl_ratio),
+                take_profit=entry_price * (1 + tp_ratio),
                 expected_return=expected_return,
-                tp_ratio=tp_ratio,
-                sl_ratio=sl_ratio,
-                avg_bars=avg_bars
+                expected_hold=avg_bars,
+                consistency=True,
+                alignment=True,
+                breakout=False,
+                candle_signal='상승 반전형',
+                reliability='높음'
             )
             return message
 
@@ -47,15 +66,24 @@ def analyze_symbol(symbol: str):
             tp_ratio = 0.56
             sl_ratio = 0.18
             avg_bars = 6
+
             message = generate_signal_message(
                 symbol=symbol,
-                entry_price=entry_price,
+                current_price=entry_price,
+                indicators=indicators,
+                action='진입',
                 score=score,
                 direction="short",
+                entry_price=(entry_price * 0.995, entry_price * 1.005),
+                stop_loss=entry_price * (1 + sl_ratio),
+                take_profit=entry_price * (1 - tp_ratio),
                 expected_return=expected_return,
-                tp_ratio=tp_ratio,
-                sl_ratio=sl_ratio,
-                avg_bars=avg_bars
+                expected_hold=avg_bars,
+                consistency=True,
+                alignment=False,
+                breakout=False,
+                candle_signal='하락 반전형',
+                reliability='중간'
             )
             return message
 
