@@ -1,6 +1,7 @@
 import requests
 import pandas as pd
 from strategy import analyze_indicators
+from spike_detector import detect_spike, detect_crash  # 🔥 추가
 
 BASE_URL = 'https://api.mexc.com/api/v3/klines'
 
@@ -19,6 +20,7 @@ def fetch_ohlcv(symbol: str, interval: str = '1m', limit: int = 100):
             'timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume'
         ])
         df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)  # 🔥 볼륨 사용 위해 추가
         return df
     except Exception as e:
         print(f"❌ {symbol} 데이터 가져오기 실패: {e}")
@@ -30,6 +32,16 @@ def analyze_symbol(symbol: str):
     if df is None or len(df) < 50:
         return None
 
+    # 🔥 1. 급등/급락 감지 먼저 시도
+    spike_msg = detect_spike(symbol, df)
+    if spike_msg:
+        return spike_msg
+
+    crash_msg = detect_crash(symbol, df)
+    if crash_msg:
+        return crash_msg
+
+    # 🔍 2. 기본 전략 분석 (롱/숏 판단)
     direction, score = analyze_indicators(df)
     if direction == 'NONE':
         return None
