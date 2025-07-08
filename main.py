@@ -17,7 +17,12 @@ def loop():
             print(f"🔍 분석 시작: {symbol}")
             result = analyze_symbol(symbol)
             if result:
-                send_telegram(result)
+                # ✅ 여러 메시지일 경우 반복 전송
+                if isinstance(result, list):
+                    for msg in result:
+                        send_telegram(msg)
+                else:
+                    send_telegram(result)
         time.sleep(600)  # 10분 간격
 
 if __name__ == '__main__':
