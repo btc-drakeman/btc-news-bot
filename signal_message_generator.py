@@ -14,7 +14,9 @@ def generate_signal_message(
     alignment: bool,
     breakout: bool,
     candle_signal: str,
-    reliability: str
+    reliability: str,
+    tp_ratio: float = None,  # ✅ 익절 비율 추가
+    sl_ratio: float = None   # ✅ 손절 비율 추가
 ):
     entry_low, entry_high = entry_price
 
