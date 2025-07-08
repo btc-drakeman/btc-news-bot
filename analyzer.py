@@ -16,7 +16,7 @@ def analyze_symbol(symbol: str):
         return None
 
     df = data['15m']
-    df.index = pd.to_datetime(df['timestamp'], unit='ms')
+    df['timestamp'] = pd.to_datetime(df.index, unit='ms')
     df = df.set_index('timestamp')
 
     try:
