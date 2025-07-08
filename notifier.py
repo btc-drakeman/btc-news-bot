@@ -1,9 +1,12 @@
-# notifier.py
-
 import requests
 from config import API_URL, USER_IDS
 
+def safe_unicode(text: str) -> str:
+    """이모지 인코딩 문제 회피용 안전 문자열 반환"""
+    return text.encode('utf-16', 'surrogatepass').decode('utf-16')
+
 def send_telegram(message: str, chat_id: str = None):
+    message = safe_unicode(message)
     targets = [chat_id] if chat_id else USER_IDS
     for uid in targets:
         try:
@@ -11,7 +14,7 @@ def send_telegram(message: str, chat_id: str = None):
                 'chat_id': uid,
                 'text': message,
                 'parse_mode': 'HTML',
-                'disable_web_page_preview': True  # 🔕 메시지 깔끔하게 전송
+                'disable_web_page_preview': True
             })
             if response.status_code == 200:
                 print(f"✅ 메시지 전송 성공 → {uid}")
