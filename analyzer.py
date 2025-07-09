@@ -41,24 +41,21 @@ def analyze_symbol(symbol: str):
         messages.append(crash_msg)
 
     direction, score = analyze_indicators(df)
-    price = df['close'].iloc[-1]
-
     if direction != 'NONE':
-        entry_low = round(price * 0.995, 2)
-        entry_high = round(price * 1.005, 2)
-        stop_loss = round(price * 0.985, 2)
-        take_profit = round(price * 1.015, 2)
-
+        plan = generate_trade_plan(df, leverage=10)
         strategy_msg = f"""
-📊 {symbol} 기술 분석 결과
-🕒 최근 가격: ${price:.2f}
+📊 {symbol.upper()} 기술 분석 (MEXC)
+🕒 최근 가격: ${plan['price']:,.2f}
 
 🔵 추천 방향: {direction}
-💰 진입 권장가: ${entry_low} ~ ${entry_high}
-🛑 손절가: ${stop_loss}
-🎯 익절가: ${take_profit}
+▶️ 종합 분석 점수: {score} / 5.0
+
+💰 진입 권장가: {plan['entry_range']}
+🛑 손절가: {plan['stop_loss']}
+🎯 익절가: {plan['take_profit']}
         """
         messages.append(strategy_msg)
+
     else:
         # 방향성 없음에도 반드시 메시지 출력
         fallback_msg = f"""
