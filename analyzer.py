@@ -1,10 +1,9 @@
+from strategy import analyze_indicators
+from spike_detector import detect_spike, detect_crash
 import requests
 import pandas as pd
-from strategy import analyze_indicators
-from spike_detector import detect_spike, detect_crash  # 🔥 추가
 
 BASE_URL = 'https://api.mexc.com/api/v3/klines'
-
 
 def fetch_ohlcv(symbol: str, interval: str = '1m', limit: int = 100):
     params = {
@@ -20,12 +19,11 @@ def fetch_ohlcv(symbol: str, interval: str = '1m', limit: int = 100):
             'timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume'
         ])
         df['close'] = df['close'].astype(float)
-        df['volume'] = df['volume'].astype(float)  # 🔥 볼륨 사용 위해 추가
+        df['volume'] = df['volume'].astype(float)
         return df
     except Exception as e:
         print(f"❌ {symbol} 데이터 가져오기 실패: {e}")
         return None
-
 
 def analyze_symbol(symbol: str):
     df = fetch_ohlcv(symbol)
@@ -34,7 +32,7 @@ def analyze_symbol(symbol: str):
 
     messages = []
 
-    # 🔥 급등/급락 별도 감지
+    # 급등/급락 전조 시그널
     spike_msg = detect_spike(symbol, df)
     if spike_msg:
         messages.append(spike_msg)
@@ -43,7 +41,7 @@ def analyze_symbol(symbol: str):
     if crash_msg:
         messages.append(crash_msg)
 
-    # 📊 기술적 분석은 별도 수행
+    # 기술적 분석
     direction, score = analyze_indicators(df)
     if direction != 'NONE':
         price = df['close'].iloc[-1]
@@ -52,16 +50,14 @@ def analyze_symbol(symbol: str):
         stop_loss = round(price * 0.985, 2)
         take_profit = round(price * 1.015, 2)
 
-        strategy_msg = f"""
-📊 {symbol} 기술 분석 결과
-🕒 최근 가격: ${price:.2f}
+        msg = f"""
+📊 {symbol} 기술 분석 (MEXC)
+💰 현재가: ${price:.2f}
+📈 전략: {direction} / 점수: {score:.2f}
 
-🔵 추천 방향: {direction}
-💰 진입 권장가: ${entry_low} ~ ${entry_high}
-🛑 손절가: ${stop_loss}
-🎯 익절가: ${take_profit}
-        """
-        messages.append(strategy_msg)
+🎯 진입가: ${entry_low} ~ ${entry_high}
+🛑 손절: ${stop_loss} | 🟢 익절: ${take_profit}
+"""
+        messages.append(msg.strip())
 
     return messages if messages else None
-
