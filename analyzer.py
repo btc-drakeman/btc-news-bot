@@ -32,7 +32,6 @@ def analyze_symbol(symbol: str):
 
     messages = []
 
-    # 급등/급락 전조 시그널
     spike_msg = detect_spike(symbol, df)
     if spike_msg:
         messages.append(spike_msg)
@@ -41,23 +40,34 @@ def analyze_symbol(symbol: str):
     if crash_msg:
         messages.append(crash_msg)
 
-    # 기술적 분석
     direction, score = analyze_indicators(df)
+    price = df['close'].iloc[-1]
+
     if direction != 'NONE':
-        price = df['close'].iloc[-1]
         entry_low = round(price * 0.995, 2)
         entry_high = round(price * 1.005, 2)
         stop_loss = round(price * 0.985, 2)
         take_profit = round(price * 1.015, 2)
 
-        msg = f"""
-📊 {symbol} 기술 분석 (MEXC)
-💰 현재가: ${price:.2f}
-📈 전략: {direction} / 점수: {score:.2f}
+        strategy_msg = f"""
+📊 {symbol} 기술 분석 결과
+🕒 최근 가격: ${price:.2f}
 
-🎯 진입가: ${entry_low} ~ ${entry_high}
-🛑 손절: ${stop_loss} | 🟢 익절: ${take_profit}
+🔵 추천 방향: {direction}
+💰 진입 권장가: ${entry_low} ~ ${entry_high}
+🛑 손절가: ${stop_loss}
+🎯 익절가: ${take_profit}
+        """
+        messages.append(strategy_msg)
+    else:
+        # 방향성 없음에도 반드시 메시지 출력
+        fallback_msg = f"""
+📊 {symbol} 분석 결과
+🕒 최근 가격: ${price:.2f}
+
+⚠️ 현재 뚜렷한 방향 신호 없음
+📌 관망 추천
 """
-        messages.append(msg.strip())
+        messages.append(fallback_msg)
 
-    return messages if messages else None
+    return messages
