@@ -71,6 +71,9 @@ def analyze_symbol(symbol: str):
         messages.append(crash_msg)
 
     price = df['close'].iloc[-1]
+    _, _, summary = analyze_indicators(df)
+    summary_text = "\\n".join([f"- {k}: {v}" for k, v in summary.items()])
+
     if final_direction != 'NONE':
         plan = generate_trade_plan(df, direction=final_direction, leverage=10)
         strategy_msg = f"""
@@ -79,6 +82,9 @@ def analyze_symbol(symbol: str):
 
 🔵 추천 방향: {final_direction}
 ▶️ 종합 분석 점수: {final_score} / 5.0
+
+📌 지표별 상태:
+{summary_text}
 
 💰 진입 권장가: {plan['entry_range']}
 🛑 손절가: {plan['stop_loss']}
@@ -92,6 +98,9 @@ def analyze_symbol(symbol: str):
 
 ⚠️ 방향성 판단 애매 (NONE)
 ▶️ 종합 분석 점수: {final_score} / 5.0
+
+📌 지표별 상태:
+{summary_text}
 
 📌 관망 유지 권장
         """
