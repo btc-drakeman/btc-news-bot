@@ -12,25 +12,42 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     latest_rsi = rsi.iloc[-1]
+    rsi_label = (
+        f"과매도 ({latest_rsi:.1f})" if latest_rsi < 30 else
+        f"과매수 ({latest_rsi:.1f})" if latest_rsi > 70 else
+        f"중립 ({latest_rsi:.1f})"
+    )
 
     # MACD
     macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     macd_hist = macd_line - signal_line
     latest_macd_hist = macd_hist.iloc[-1]
+    macd_label = (
+        f"상승 전환 (+{latest_macd_hist:.2f})" if latest_macd_hist > 0.05 else
+        f"하락 전환 ({latest_macd_hist:.2f})" if latest_macd_hist < -0.05 else
+        f"중립 ({latest_macd_hist:.2f})"
+    )
 
     # EMA 기울기
     ema = close.ewm(span=20, adjust=False).mean()
     latest_ema_slope = ema.diff().iloc[-1]
+    ema_label = (
+        "상승" if latest_ema_slope > 0.1 else
+        "하락" if latest_ema_slope < -0.1 else
+        "보합"
+    )
 
     # 거래량 평균 이상 여부
     avg_volume = volume.iloc[-21:-1].mean()
     current_volume = volume.iloc[-1]
     volume_score = 0.5 if current_volume > avg_volume * 1.5 else 0.0
+    volume_label = "평균 이상" if volume_score > 0 else "평균 이하"
 
     # 볼린저 중심선 돌파 여부
     middle_band = close.rolling(window=20).mean()
     bb_score = 0.8 if close.iloc[-1] > middle_band.iloc[-1] else 0.0
+    bb_label = "돌파" if bb_score > 0 else "미돌파"
 
     # ADX 계산 (필터)
     high = df['high']
@@ -53,6 +70,7 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     adx = dx.rolling(window=14).mean()
     latest_adx = adx.iloc[-1]
     latest_atr = atr.iloc[-1]
+    adx_label = f"추세 강함 ({latest_adx:.1f})" if latest_adx >= 25 else f"추세 약함 ({latest_adx:.1f})"
 
     long_score = 0.0
     short_score = 0.0
@@ -85,12 +103,21 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
         short_score += 0.8 - bb_score
 
     max_score = 5.0
+    indicator_summary = {
+        'RSI': rsi_label,
+        'MACD': macd_label,
+        'EMA': ema_label,
+        'Volume': volume_label,
+        'Bollinger': bb_label,
+        'ADX': adx_label
+    }
+
     if long_score >= 4.0:
-        return 'LONG', round(long_score, 2)
+        return 'LONG', round(long_score, 2), indicator_summary
     elif short_score >= 4.0:
-        return 'SHORT', round(short_score, 2)
+        return 'SHORT', round(short_score, 2), indicator_summary
     else:
-        return 'NONE', round(max(long_score, short_score), 2)
+        return 'NONE', round(max(long_score, short_score), 2), indicator_summary
 
 
 def generate_trade_plan(df: pd.DataFrame, leverage: int = 10):

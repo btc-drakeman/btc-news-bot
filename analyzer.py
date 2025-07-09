@@ -1,9 +1,10 @@
-from strategy import analyze_indicators
-from spike_detector import detect_spike, detect_crash
 import requests
 import pandas as pd
+from strategy import analyze_indicators, generate_trade_plan
+from spike_detector import detect_spike, detect_crash
 
 BASE_URL = 'https://api.mexc.com/api/v3/klines'
+
 
 def fetch_ohlcv(symbol: str, interval: str = '1m', limit: int = 100):
     params = {
@@ -20,14 +21,18 @@ def fetch_ohlcv(symbol: str, interval: str = '1m', limit: int = 100):
         ])
         df['close'] = df['close'].astype(float)
         df['volume'] = df['volume'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
         return df
     except Exception as e:
         print(f"❌ {symbol} 데이터 가져오기 실패: {e}")
         return None
 
+
 def analyze_symbol(symbol: str):
     df = fetch_ohlcv(symbol)
     if df is None or len(df) < 50:
+        print(f"⚠️ {symbol} 데이터 부족 또는 수집 실패")
         return None
 
     messages = []
@@ -40,7 +45,9 @@ def analyze_symbol(symbol: str):
     if crash_msg:
         messages.append(crash_msg)
 
-    direction, score = analyze_indicators(df)
+    direction, score, summary = analyze_indicators(df)
+    price = df['close'].iloc[-1]
+
     if direction != 'NONE':
         plan = generate_trade_plan(df, leverage=10)
         strategy_msg = f"""
@@ -55,16 +62,22 @@ def analyze_symbol(symbol: str):
 🎯 익절가: {plan['take_profit']}
         """
         messages.append(strategy_msg)
-
     else:
-        # 방향성 없음에도 반드시 메시지 출력
+        summary_text = "\n".join([
+            f"- {k}: {v}" for k, v in summary.items()
+        ])
         fallback_msg = f"""
-📊 {symbol} 분석 결과
-🕒 최근 가격: ${price:.2f}
+📊 {symbol.upper()} 분석 결과
+🕒 최근 가격: ${price:,.2f}
 
-⚠️ 현재 뚜렷한 방향 신호 없음
-📌 관망 추천
-"""
+⚠️ 방향성 판단 애매 (NONE)
+▶️ 종합 분석 점수: {score} / 5.0
+
+📌 지표별 상태:
+{summary_text}
+
+📌 관망 유지 권장
+        """
         messages.append(fallback_msg)
 
-    return messages
+    return messages if messages else None
