@@ -49,7 +49,7 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     bb_score = 0.8 if close.iloc[-1] > middle_band.iloc[-1] else 0.0
     bb_label = "돌파" if bb_score > 0 else "미돌파"
 
-    # ADX 계산 (필터)
+    # ADX 계산 (참고용 필터)
     high = df['high']
     low = df['low']
     tr1 = high - low
@@ -72,35 +72,35 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     latest_atr = atr.iloc[-1]
     adx_label = f"추세 강함 ({latest_adx:.1f})" if latest_adx >= 25 else f"추세 약함 ({latest_adx:.1f})"
 
+    # 점수 계산 (항상 계산)
     long_score = 0.0
     short_score = 0.0
 
-    if latest_adx >= 25:
-        # RSI
-        if latest_rsi < 30:
-            long_score += 1.0
-        elif latest_rsi > 70:
-            short_score += 1.0
+    # RSI
+    if latest_rsi < 30:
+        long_score += 1.0
+    elif latest_rsi > 70:
+        short_score += 1.0
 
-        # MACD
-        if latest_macd_hist > 0:
-            long_score += 1.5
-        elif latest_macd_hist < 0:
-            short_score += 1.5
+    # MACD
+    if latest_macd_hist > 0:
+        long_score += 1.5
+    elif latest_macd_hist < 0:
+        short_score += 1.5
 
-        # EMA
-        if latest_ema_slope > 0:
-            long_score += 1.2
-        elif latest_ema_slope < 0:
-            short_score += 1.2
+    # EMA
+    if latest_ema_slope > 0:
+        long_score += 1.2
+    elif latest_ema_slope < 0:
+        short_score += 1.2
 
-        # 거래량
-        long_score += volume_score
-        short_score += 0.5 - volume_score
+    # 거래량
+    long_score += volume_score
+    short_score += 0.5 - volume_score
 
-        # 볼린저 중심선 돌파 여부
-        long_score += bb_score
-        short_score += 0.8 - bb_score
+    # 볼린저 중심선 돌파 여부
+    long_score += bb_score
+    short_score += 0.8 - bb_score
 
     max_score = 5.0
     indicator_summary = {
