@@ -49,7 +49,7 @@ def analyze_symbol(symbol: str):
     price = df['close'].iloc[-1]
 
     if direction != 'NONE':
-        plan = generate_trade_plan(df, leverage=10)
+        plan = generate_trade_plan(df, direction=direction, leverage=10)
         summary_text = "\n".join([
             f"- {k}: {v}" for k, v in summary.items()
         ])

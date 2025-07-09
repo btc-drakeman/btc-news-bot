@@ -120,7 +120,7 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
         return 'NONE', round(max(long_score, short_score), 2), indicator_summary
 
 
-def generate_trade_plan(df: pd.DataFrame, leverage: int = 10):
+def generate_trade_plan(df: pd.DataFrame, direction: str = 'LONG', leverage: int = 10):
     price = df['close'].iloc[-1]
 
     high = df['high']
@@ -138,8 +138,13 @@ def generate_trade_plan(df: pd.DataFrame, leverage: int = 10):
 
     # 손절/익절 범위 = ATR 기반 (레버리지 고려)
     atr_multiplier = 1.2 * (20 / leverage)
-    stop_loss = price - (atr * atr_multiplier)
-    take_profit = price + (atr * atr_multiplier * 2)
+
+    if direction.upper() == 'SHORT':
+        stop_loss = price + (atr * atr_multiplier)
+        take_profit = price - (atr * atr_multiplier * 2)
+    else:  # LONG
+        stop_loss = price - (atr * atr_multiplier)
+        take_profit = price + (atr * atr_multiplier * 2)
 
     return {
         'price': price,
