@@ -143,8 +143,8 @@ def generate_trade_plan(df: pd.DataFrame, leverage: int = 10):
 
     return {
         'price': price,
-        'entry_range': f"${entry_low:,.2f} ~ ${entry_high:,.2f}",
-        'stop_loss': f"${stop_loss:,.2f}",
-        'take_profit': f"${take_profit:,.2f}",
+        'entry_range': f"${entry_low:,.4f} ~ ${entry_high:,.4f}",
+        'stop_loss': f"${stop_loss:,.4f}",
+        'take_profit': f"${take_profit:,.4f}",
         'atr': round(atr, 4)
     }
