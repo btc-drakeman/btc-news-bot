@@ -50,6 +50,9 @@ def analyze_symbol(symbol: str):
 
     if direction != 'NONE':
         plan = generate_trade_plan(df, leverage=10)
+        summary_text = "\n".join([
+            f"- {k}: {v}" for k, v in summary.items()
+        ])
         strategy_msg = f"""
 📊 {symbol.upper()} 기술 분석 (MEXC)
 🕒 최근 가격: ${plan['price']:,.2f}
@@ -57,11 +60,15 @@ def analyze_symbol(symbol: str):
 🔵 추천 방향: {direction}
 ▶️ 종합 분석 점수: {score} / 5.0
 
+📌 지표별 상태:
+{summary_text}
+
 💰 진입 권장가: {plan['entry_range']}
 🛑 손절가: {plan['stop_loss']}
 🎯 익절가: {plan['take_profit']}
         """
         messages.append(strategy_msg)
+
     else:
         summary_text = "\n".join([
             f"- {k}: {v}" for k, v in summary.items()
