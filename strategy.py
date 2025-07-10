@@ -132,12 +132,30 @@ def generate_trade_plan(df: pd.DataFrame, direction: str = 'LONG', leverage: int
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     atr = tr.rolling(window=14).mean().iloc[-1]
 
+    # ADX 기반 multiplier 조정
+    plus_dm = high.diff()
+    minus_dm = low.diff()
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+    tr14 = tr.rolling(window=14).sum()
+    plus_di = 100 * (plus_dm.rolling(window=14).sum() / tr14)
+    minus_di = 100 * (minus_dm.rolling(window=14).sum() / tr14)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(window=14).mean().iloc[-1]
+
+    base_multiplier = 1.2 * (20 / leverage)
+    if adx >= 40:
+        atr_multiplier = base_multiplier * 1.6
+    elif adx >= 30:
+        atr_multiplier = base_multiplier * 1.3
+    elif adx >= 25:
+        atr_multiplier = base_multiplier * 1.1
+    else:
+        atr_multiplier = base_multiplier * 0.9
+
     # 진입 범위 ±0.5%
     entry_low = price * 0.995
     entry_high = price * 1.005
-
-    # 손절/익절 범위 = ATR 기반 (레버리지 고려)
-    atr_multiplier = 1.2 * (20 / leverage)
 
     if direction.upper() == 'SHORT':
         stop_loss = price + (atr * atr_multiplier)
