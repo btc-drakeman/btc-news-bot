@@ -1,23 +1,6 @@
 import pandas_ta as ta
 import numpy as np
-
-# ✅ 전략 계산 함수 (레버리지 10x 기준)
-def generate_trade_plan(price: float, leverage: int = 10):
-    entry_low = price * 0.998
-    entry_high = price * 1.002
-
-    risk_unit = 0.005 * 20 / leverage
-    reward_unit = 0.015 * 20 / leverage
-
-    stop_loss = price * (1 - risk_unit)
-    take_profit = price * (1 + reward_unit)
-
-    return {
-        'entry_range': f"${entry_low:,.2f} ~ ${entry_high:,.2f}",
-        'stop_loss': f"${stop_loss:,.2f}",
-        'take_profit': f"${take_profit:,.2f}"
-    }
-
+from strategy import generate_trade_plan  # ✅ 최신 전략 함수 사용
 
 def detect_spike(symbol: str, df):
     messages = []
@@ -62,8 +45,7 @@ def detect_spike(symbol: str, df):
             messages.append(f"⚡ RSI 급반등 ({prev_rsi:.1f} → {current_rsi:.1f})")
 
     if score >= 2:
-        current_price = df['close'].iloc[-1]
-        plan = generate_trade_plan(current_price, leverage=10)
+        plan = generate_trade_plan(df, direction='LONG', leverage=10)
         details = '\n- '.join(messages)
         msg = f"""🚨 급등 전조 감지: {symbol.upper()}
 - {details}
@@ -78,7 +60,6 @@ def detect_spike(symbol: str, df):
         return msg
 
     return None
-
 
 def detect_crash(symbol: str, df):
     messages = []
@@ -124,8 +105,7 @@ def detect_crash(symbol: str, df):
             messages.append(f"⚡ RSI 급하락 ({prev_rsi:.1f} → {current_rsi:.1f})")
 
     if score >= 2:
-        current_price = df['close'].iloc[-1]
-        plan = generate_trade_plan(current_price, leverage=10)
+        plan = generate_trade_plan(df, direction='SHORT', leverage=10)
         details = '\n- '.join(messages)
         msg = f"""⚠️ 급락 전조 감지: {symbol.upper()}
 - {details}
