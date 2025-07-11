@@ -1,19 +1,24 @@
-# analyzer.py (Bybit 선물 기반)
-
 import requests
 import pandas as pd
-from strategy import should_enter_position, is_pre_entry_signal, calculate_tp_sl, compute_rsi, calculate_atr
+from strategy import (
+    should_enter_position,
+    is_pre_entry_signal,
+    calculate_tp_sl,
+    compute_rsi,
+    calculate_atr
+)
 from config import SYMBOLS
 from notifier import send_telegram
+from spike_detector import detect_spike, detect_crash
 
 BASE_URL = 'https://api.bybit.com'
 
 def fetch_ohlcv(symbol: str, interval: str = '15', limit: int = 100):
     endpoint = '/v5/market/kline'
     params = {
-        'category': 'linear',     # 선물 마켓
+        'category': 'linear',
         'symbol': symbol,
-        'interval': interval,     # ex: '1', '3', '15', '60'
+        'interval': interval,
         'limit': limit
     }
 
@@ -74,9 +79,10 @@ def analyze_symbol(symbol: str):
     if current_price is None:
         return None
 
-    direction = should_enter_position(df)
     messages = []
 
+    # ✅ 진입 시그널
+    direction = should_enter_position(df)
     if direction:
         entry_price = current_price
         tp, sl = calculate_tp_sl(entry_price, df['atr'].iloc[-1], direction)
@@ -95,6 +101,8 @@ def analyze_symbol(symbol: str):
 🟢 익절가: ${tp:,.4f}
         """
         messages.append(msg.strip())
+
+    # ⚠️ 예비 시그널
     else:
         pre_signal = is_pre_entry_signal(df)
         if pre_signal:
@@ -110,5 +118,15 @@ def analyze_symbol(symbol: str):
 📌 다음 캔들에서 진입 조건 충족 가능성 있음
             """
             messages.append(msg.strip())
+
+    # 🚨 급등 전조 경고
+    spike_msg = detect_spike(symbol, df)
+    if spike_msg:
+        messages.append(spike_msg)
+
+    # ⚠️ 급락 전조 경고
+    crash_msg = detect_crash(symbol, df)
+    if crash_msg:
+        messages.append(crash_msg)
 
     return messages if messages else None
