@@ -59,6 +59,18 @@ def generate_trade_plan(price: float, leverage: int = 20):
         'take_profit': f"${take_profit:,.2f}"
     }
 
+def calculate_atr(df, period=14):
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    return atr
+
 # ✅ compute_rsi 함수 추가 (RSI 단독 계산용)
 def compute_rsi(series, period=14):
     delta = series.diff()
