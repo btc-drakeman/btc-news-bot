@@ -1,11 +1,11 @@
 import requests
 import pandas as pd
 from strategy import (
-    should_enter_position,
-    is_pre_entry_signal,
-    calculate_tp_sl,
+    analyze_indicators,
+    generate_trade_plan,
     compute_rsi,
-    calculate_atr
+    calculate_atr,
+    is_pre_entry_signal
 )
 from config import SYMBOLS
 from notifier import send_telegram
@@ -81,24 +81,20 @@ def analyze_symbol(symbol: str):
 
     messages = []
 
-    # ✅ 진입 시그널
-    direction = should_enter_position(df)
-    if direction:
-        entry_price = current_price
-        tp, sl = calculate_tp_sl(entry_price, df['atr'].iloc[-1], direction)
+    # ✅ 전략 기반 진입 판단 (20x 기반 TP/SL 자동 적용)
+    direction, score = analyze_indicators(df)
+    if direction != 'NONE':
+        plan = generate_trade_plan(current_price, leverage=20)
 
         msg = f"""
 📊 {symbol.upper()} 기술 분석 (Bybit 선물)
 🕒 최근 시세 기준
-💰 현재가: ${entry_price:,.4f}
-
-⚖️ RSI: {df['rsi'].iloc[-1]:.2f}
-📐 ATR: {df['atr'].iloc[-1]:.4f}
+💰 현재가: ${current_price:,.4f}
 
 ▶️ 추천 방향: {direction}
-🎯 진입가: ${entry_price:,.4f}
-🛑 손절가: ${sl:,.4f}
-🟢 익절가: ${tp:,.4f}
+🎯 진입가: {plan['entry_range']}
+🛑 손절가: {plan['stop_loss']}
+🟢 익절가: {plan['take_profit']}
         """
         messages.append(msg.strip())
 
