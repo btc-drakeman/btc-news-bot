@@ -1,7 +1,7 @@
 # ✅ analyzer.py
 import requests
 import pandas as pd
-from strategy import is_strong_entry_signal, generate_trade_plan
+from strategy import should_enter_position, calculate_tp_sl
 from config import SYMBOLS
 from notifier import send_telegram
 
@@ -34,19 +34,46 @@ def analyze_symbol(symbol: str):
     if df is None or len(df) < 50:
         return None
 
-    messages = []
+    df['rsi'] = compute_rsi(df['close'])
+    df['atr'] = calculate_atr(df)
 
-    if is_strong_entry_signal(df):
-        plan = generate_trade_plan(df, direction='LONG', leverage=10)
-        msg = f"""
-🧠 강력 진입 조건 포착: {symbol.upper()}
-📉 RSI < 35, MACD 반전, ADX > 20 충족
+    direction = should_enter_position(df, symbol)
+    if not direction:
+        return None
 
-💰 현재가: ${plan['price']:,.2f}
-🎯 진입가: {plan['entry_range']}
-🛑 손절가: {plan['stop_loss']}
-🟢 익절가: {plan['take_profit']}
-        """
-        messages.append(msg.strip())
+    entry_price = df['close'].iloc[-1]
+    tp, sl = calculate_tp_sl(entry_price, df['atr'].iloc[-1], direction)
 
-    return messages if messages else None
+    msg = f"""
+📊 {symbol.upper()} 기술 분석 (MEXC)
+🕒 최근 시세 기준
+💰 현재가: ${entry_price:,.4f}
+
+⚖️ RSI: {df['rsi'].iloc[-1]:.2f}
+📐 ATR: {df['atr'].iloc[-1]:.4f}
+
+▶️ 추천 방향: {direction}
+🎯 진입가: ${entry_price:,.4f}
+🛑 손절가: ${sl:,.4f}
+🟢 익절가: ${tp:,.4f}
+    """
+
+    return [msg.strip()]
+
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_atr(df, period=14):
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
