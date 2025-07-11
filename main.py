@@ -9,13 +9,13 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🟢 봇 실행 중"
+    return "🟢 Bybit 선물 기반 자동 분석 봇 실행 중"
 
 def loop():
     while True:
         for symbol in SYMBOLS:
             try:
-                print(f"🔍 분석 시작: {symbol}")
+                print(f"\n🔍 분석 시작: {symbol}")
                 result = analyze_symbol(symbol)
                 if result:
                     if isinstance(result, list):
@@ -23,11 +23,13 @@ def loop():
                             send_telegram(msg)
                     else:
                         send_telegram(result)
-                print(f"✅ {symbol} 분석 완료")  # 완료 로그 추가
+                print(f"✅ {symbol} 분석 완료")
             except Exception as e:
                 print(f"❌ {symbol} 분석 중 오류 발생: {e}")
         time.sleep(600)  # 10분 간격
 
 if __name__ == '__main__':
-    Thread(target=loop).start()
+    t = Thread(target=loop)
+    t.daemon = True
+    t.start()
     app.run(host='0.0.0.0', port=8080)

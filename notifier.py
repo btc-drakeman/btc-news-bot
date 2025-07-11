@@ -1,10 +1,11 @@
 import requests
-from config import BOT_TOKEN, USER_IDS
+from config import TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
 
-API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
 def send_telegram(text):
-    for uid in USER_IDS:
+    chat_ids = TELEGRAM_CHAT_ID if isinstance(TELEGRAM_CHAT_ID, list) else [TELEGRAM_CHAT_ID]
+    for uid in chat_ids:
         try:
             res = requests.post(API_URL, data={
                 'chat_id': uid,

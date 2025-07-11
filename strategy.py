@@ -1,5 +1,3 @@
-# strategy.py
-
 import pandas as pd
 
 def calculate_atr(df, period=14):
@@ -22,16 +20,16 @@ def compute_rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def should_enter_position(df, symbol):
+def should_enter_position(df):
     df['rsi'] = compute_rsi(df['close'])
     df['atr'] = calculate_atr(df)
 
-    long_condition = (df['rsi'].shift(1) <= 40) & (df['rsi'] >= 48)
-    short_condition = (df['rsi'].shift(1) >= 60) & (df['rsi'] <= 52)
+    long_cond = (df['rsi'].shift(1) <= 40) & (df['rsi'] >= 48)
+    short_cond = (df['rsi'].shift(1) >= 60) & (df['rsi'] <= 52)
 
-    if long_condition.iloc[-1]:
+    if long_cond.iloc[-1]:
         return 'LONG'
-    elif short_condition.iloc[-1]:
+    elif short_cond.iloc[-1]:
         return 'SHORT'
     return None
 
@@ -61,8 +59,9 @@ def is_pre_entry_signal(df):
     return None
 
 def calculate_tp_sl(entry_price, atr, direction):
-    tp_multiplier = 0.8
-    sl_multiplier = 0.5
+    # Bybit 선물 기준: 레버리지 고려하여 폭 설정
+    tp_multiplier = 1.2
+    sl_multiplier = 1.8
 
     if direction == 'LONG':
         tp = entry_price + atr * tp_multiplier
@@ -73,4 +72,26 @@ def calculate_tp_sl(entry_price, atr, direction):
     else:
         tp, sl = None, None
 
-    return tp, sl
+    return round(tp, 4), round(sl, 4)
+
+def analyze_indicators(symbol, df, price):
+    df['rsi'] = compute_rsi(df['close'])
+    df['atr'] = calculate_atr(df)
+    direction = should_enter_position(df)
+
+    if not direction:
+        return None
+
+    atr = df['atr'].iloc[-1]
+    tp, sl = calculate_tp_sl(price, atr, direction)
+
+    message = f"""
+🚨 {symbol} 진입 시그널 발생! (Bybit 선물 기준)
+📈 방향: {direction}
+💰 현재가: ${price:.4f}
+📏 ATR: {atr:.4f}
+
+🎯 익절가: ${tp}
+🛑 손절가: ${sl}
+"""
+    return message.strip()
