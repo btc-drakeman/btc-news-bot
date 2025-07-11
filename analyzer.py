@@ -1,7 +1,7 @@
 # ✅ analyzer.py
 import requests
 import pandas as pd
-from strategy import should_enter_position, calculate_tp_sl
+from strategy import should_enter_position, is_pre_entry_signal, calculate_tp_sl, compute_rsi, calculate_atr
 from config import SYMBOLS
 from notifier import send_telegram
 
@@ -38,13 +38,13 @@ def analyze_symbol(symbol: str):
     df['atr'] = calculate_atr(df)
 
     direction = should_enter_position(df, symbol)
-    if not direction:
-        return None
+    messages = []
 
-    entry_price = df['close'].iloc[-1]
-    tp, sl = calculate_tp_sl(entry_price, df['atr'].iloc[-1], direction)
+    if direction:
+        entry_price = df['close'].iloc[-1]
+        tp, sl = calculate_tp_sl(entry_price, df['atr'].iloc[-1], direction)
 
-    msg = f"""
+        msg = f"""
 📊 {symbol.upper()} 기술 분석 (MEXC)
 🕒 최근 시세 기준
 💰 현재가: ${entry_price:,.4f}
@@ -56,24 +56,22 @@ def analyze_symbol(symbol: str):
 🎯 진입가: ${entry_price:,.4f}
 🛑 손절가: ${sl:,.4f}
 🟢 익절가: ${tp:,.4f}
-    """
+        """
+        messages.append(msg.strip())
+    else:
+        pre_signal = is_pre_entry_signal(df)
+        if pre_signal:
+            rsi_now = df['rsi'].iloc[-1]
+            rsi_prev = df['rsi'].iloc[-2]
+            volume_now = df['volume'].iloc[-1]
+            volume_ma = df['volume'].rolling(21).mean().iloc[-1]
 
-    return [msg.strip()]
+            msg = f"""
+⚠️ 예비 진입 시그널 감지: {symbol.upper()} ({pre_signal} 유력)
+🔍 RSI: {rsi_now:.2f} (이전봉: {rsi_prev:.2f})
+📊 거래량: {volume_now:,.0f} (평균: {volume_ma:,.0f})
+📌 다음 캔들에서 진입 조건 충족 가능성 있음
+            """
+            messages.append(msg.strip())
 
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_atr(df, period=14):
-    high = df['high']
-    low = df['low']
-    close = df['close']
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+    return messages if messages else None

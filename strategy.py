@@ -14,6 +14,14 @@ def calculate_atr(df, period=14):
     atr = tr.rolling(period).mean()
     return atr
 
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
 def should_enter_position(df, symbol):
     df['rsi'] = compute_rsi(df['close'])
     df['atr'] = calculate_atr(df)
@@ -27,13 +35,30 @@ def should_enter_position(df, symbol):
         return 'SHORT'
     return None
 
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+def is_pre_entry_signal(df):
+    df['rsi'] = compute_rsi(df['close'])
+    df['volume_ma'] = df['volume'].rolling(21).mean()
+
+    rsi_now = df['rsi'].iloc[-1]
+    rsi_prev = df['rsi'].iloc[-2]
+    rsi_delta = rsi_now - rsi_prev
+    vol_now = df['volume'].iloc[-1]
+    vol_ma = df['volume_ma'].iloc[-1]
+
+    long_pre = (
+        rsi_prev <= 40 and 45 <= rsi_now < 48 and
+        rsi_delta > 0 and vol_now > vol_ma
+    )
+    short_pre = (
+        rsi_prev >= 60 and 55 >= rsi_now > 52 and
+        rsi_delta < 0 and vol_now > vol_ma
+    )
+
+    if long_pre:
+        return 'LONG'
+    elif short_pre:
+        return 'SHORT'
+    return None
 
 def calculate_tp_sl(entry_price, atr, direction):
     tp_multiplier = 0.8
