@@ -58,3 +58,12 @@ def generate_trade_plan(price: float, leverage: int = 20):
         'stop_loss': f"${stop_loss:,.2f}",
         'take_profit': f"${take_profit:,.2f}"
     }
+
+# ✅ compute_rsi 함수 추가 (RSI 단독 계산용)
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
