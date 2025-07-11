@@ -42,7 +42,6 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
         return 'NONE', 0
 
 
-# ✅ 전략 계산 함수 (레버리지 20x 기준)
 def generate_trade_plan(price: float, leverage: int = 20):
     entry_low = price * 0.998
     entry_high = price * 1.002
@@ -59,6 +58,16 @@ def generate_trade_plan(price: float, leverage: int = 20):
         'take_profit': f"${take_profit:,.2f}"
     }
 
+
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
 def calculate_atr(df, period=14):
     high = df['high']
     low = df['low']
@@ -71,11 +80,28 @@ def calculate_atr(df, period=14):
     atr = tr.rolling(period).mean()
     return atr
 
-# ✅ compute_rsi 함수 추가 (RSI 단독 계산용)
-def compute_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0).rolling(period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(period).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+
+def is_pre_entry_signal(df):
+    df['rsi'] = compute_rsi(df['close'])
+    df['volume_ma'] = df['volume'].rolling(21).mean()
+
+    rsi_now = df['rsi'].iloc[-1]
+    rsi_prev = df['rsi'].iloc[-2]
+    rsi_delta = rsi_now - rsi_prev
+    vol_now = df['volume'].iloc[-1]
+    vol_ma = df['volume_ma'].iloc[-1]
+
+    long_pre = (
+        rsi_prev <= 40 and 45 <= rsi_now < 48 and
+        rsi_delta > 0 and vol_now > vol_ma
+    )
+    short_pre = (
+        rsi_prev >= 60 and 55 >= rsi_now > 52 and
+        rsi_delta < 0 and vol_now > vol_ma
+    )
+
+    if long_pre:
+        return 'LONG'
+    elif short_pre:
+        return 'SHORT'
+    return None
