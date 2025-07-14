@@ -1,3 +1,5 @@
+import pandas as pd
+
 def analyze_indicators(df: pd.DataFrame) -> tuple:
     df = df.copy()
     df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
