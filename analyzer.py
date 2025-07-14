@@ -55,6 +55,7 @@ def analyze_symbol(symbol: str):
 
     messages = []
 
+    # 📌 급등/급락 시그널 감지
     spike_msg = detect_spike(symbol, df)
     if spike_msg:
         messages.append(spike_msg)
@@ -63,16 +64,33 @@ def analyze_symbol(symbol: str):
     if crash_msg:
         messages.append(crash_msg)
 
+    # 📌 전략 분석 (롱/숏)
     direction, score = analyze_indicators(df)
     if direction != 'NONE':
         current_price = fetch_current_price(symbol)
         if current_price is None:
             return None
 
-        plan = generate_trade_plan(current_price, leverage=20)
+        # ✅ ATR 계산
+        df['tr'] = pd.concat([
+            df['high'] - df['low'],
+            (df['high'] - df['close'].shift()).abs(),
+            (df['low'] - df['close'].shift()).abs()
+        ], axis=1).max(axis=1)
+        df['atr'] = df['tr'].rolling(14).mean()
+        atr = df['atr'].iloc[-1]
+
+        if pd.isna(atr) or atr == 0:
+            print(f"⚠️ {symbol} ATR 계산 실패")
+            return None
+
+        plan = generate_trade_plan(current_price, atr)
+
+        # ✅ 방향별 메시지 이모지 구분
+        emoji = "📈" if direction == 'LONG' else "📉"
 
         msg = f"""
-📊 {symbol.upper()} 기술 분석 (MEXC)
+{emoji} {symbol.upper()} 기술 분석 (MEXC)
 🕒 최근 시세 기준
 💰 현재가: ${current_price:,.4f}
 
