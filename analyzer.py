@@ -22,7 +22,7 @@ def fetch_ohlcv(symbol: str, interval: str = '15m', limit: int = 100):
 
         df = pd.DataFrame(raw, columns=[
             'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_volume', 'count', 'taker_buy_volume', 'taker_buy_quote', 'ignore'
+            'close_time', 'quote_volume'
         ])
         df['close'] = df['close'].astype(float)
         df['high'] = df['high'].astype(float)
