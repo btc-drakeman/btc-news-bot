@@ -1,6 +1,5 @@
 import pandas as pd
 
-
 def analyze_indicators(df: pd.DataFrame) -> tuple:
     close = df['close']
     delta = close.diff()
@@ -41,23 +40,26 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     else:
         return 'NONE', 0
 
-
-def generate_trade_plan(price: float, leverage: int = 20):
+# ✅ direction 추가: 'LONG' 또는 'SHORT'
+def generate_trade_plan(price: float, leverage: int = 20, direction: str = 'LONG'):
     entry_low = price * 0.998
     entry_high = price * 1.002
 
     risk_unit = 0.005 * 20 / leverage
     reward_unit = 0.015 * 20 / leverage
 
-    stop_loss = price * (1 - risk_unit)
-    take_profit = price * (1 + reward_unit)
+    if direction == 'SHORT':
+        stop_loss = price * (1 + risk_unit)
+        take_profit = price * (1 - reward_unit)
+    else:  # 기본은 LONG
+        stop_loss = price * (1 - risk_unit)
+        take_profit = price * (1 + reward_unit)
 
     return {
         'entry_range': f"${entry_low:,.2f} ~ ${entry_high:,.2f}",
         'stop_loss': f"${stop_loss:,.2f}",
         'take_profit': f"${take_profit:,.2f}"
     }
-
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -66,7 +68,6 @@ def compute_rsi(series, period=14):
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
-
 
 def calculate_atr(df, period=14):
     high = df['high']
@@ -79,7 +80,6 @@ def calculate_atr(df, period=14):
     ], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
     return atr
-
 
 def is_pre_entry_signal(df):
     df['rsi'] = compute_rsi(df['close'])

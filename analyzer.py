@@ -71,7 +71,7 @@ def analyze_symbol(symbol: str):
         if current_price is None:
             return None
 
-        plan = generate_trade_plan(current_price, leverage=20)
+        plan = generate_trade_plan(current_price, leverage=20, direction=direction)
 
         msg = f"""
 📊 {symbol.upper()} 기술 분석 (MEXC)
