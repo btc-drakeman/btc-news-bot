@@ -5,6 +5,13 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["volume_ma"] = df["volume"].rolling(20).mean()
 
+    # ✅ MACD 계산
+    ema12 = df["close"].ewm(span=12, adjust=False).mean()
+    ema26 = df["close"].ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df["macd_hist"] = macd_line - signal_line
+
     high = df["high"]
     low = df["low"]
     close = df["close"]
@@ -24,6 +31,7 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     df["adx"] = dx.rolling(14).mean()
 
+    # 📌 진입 판단용 최신값 추출
     prev_close = df["close"].iloc[-2]
     curr_close = df["close"].iloc[-1]
     prev_ema = df["ema20"].iloc[-2]
@@ -31,24 +39,28 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     curr_vol = df["volume"].iloc[-1]
     vol_ma = df["volume_ma"].iloc[-1]
     curr_adx = df["adx"].iloc[-1]
+    macd_hist = df["macd_hist"].iloc[-1]
 
+    # ✅ LONG 조건
     if (
         prev_close < prev_ema and curr_close > curr_ema and
-        curr_vol > vol_ma * 2 and
-        curr_adx > 25
+        curr_vol > vol_ma * 1.5 and
+        curr_adx > 20 and
+        macd_hist > 0
     ):
         return 'LONG', 4
 
+    # ✅ SHORT 조건
     if (
         prev_close > prev_ema and curr_close < curr_ema and
-        curr_vol > vol_ma * 2 and
-        curr_adx > 25
+        curr_vol > vol_ma * 1.5 and
+        curr_adx > 20 and
+        macd_hist < 0
     ):
         return 'SHORT', 4
 
     return 'NONE', 0
 
-# ✅ 누락되었던 함수 추가
 def generate_trade_plan(price: float, atr: float):
     entry_low = price * 0.998
     entry_high = price * 1.002
