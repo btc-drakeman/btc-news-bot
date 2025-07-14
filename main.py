@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🟢 Bybit 선물 기반 자동 분석 봇 실행 중"
+    return "🟢 봇 실행 중"
 
 def loop():
     while True:
@@ -26,7 +26,7 @@ def loop():
                 print(f"✅ {symbol} 분석 완료")
             except Exception as e:
                 print(f"❌ {symbol} 분석 중 오류 발생: {e}")
-        time.sleep(600)  # 10분 간격
+        time.sleep(900)  # 15분 간격
 
 if __name__ == '__main__':
     t = Thread(target=loop)
