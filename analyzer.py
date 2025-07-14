@@ -55,7 +55,6 @@ def analyze_symbol(symbol: str):
 
     messages = []
 
-    # 급등/급락 탐지
     spike_msg = detect_spike(symbol, df)
     if spike_msg:
         messages.append(spike_msg)
@@ -64,14 +63,13 @@ def analyze_symbol(symbol: str):
     if crash_msg:
         messages.append(crash_msg)
 
-    # 기술 분석
     direction, score = analyze_indicators(df)
     if direction != 'NONE':
         current_price = fetch_current_price(symbol)
         if current_price is None:
             return None
 
-        plan = generate_trade_plan(current_price, leverage=20, direction=direction)
+        plan = generate_trade_plan(current_price, leverage=20)
 
         msg = f"""
 📊 {symbol.upper()} 기술 분석 (MEXC)
