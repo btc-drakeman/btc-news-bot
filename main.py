@@ -29,7 +29,5 @@ def loop():
         time.sleep(900)  # 15분 간격
 
 if __name__ == '__main__':
-    t = Thread(target=loop)
-    t.daemon = True
-    t.start()
+    Thread(target=loop, daemon=True).start()  # 백그라운드 스레드 실행
     app.run(host='0.0.0.0', port=8080)
