@@ -3,7 +3,6 @@ import pandas as pd
 from strategy import analyze_indicators, generate_trade_plan
 from config import SYMBOLS
 from notifier import send_telegram
-from spike_detector import detect_spike, detect_crash
 
 BASE_URL = 'https://api.mexc.com'
 
@@ -49,56 +48,61 @@ def fetch_current_price(symbol: str):
         return None
 
 def analyze_symbol(symbol: str):
+    from spike_detector import detect_spike_conditions, detect_crash_conditions
+
     df = fetch_ohlcv(symbol)
     if df is None or len(df) < 50:
         return None
 
     messages = []
 
-    # 📌 급등/급락 시그널 감지
-    spike_msg = detect_spike(symbol, df)
-    if spike_msg:
-        messages.append(spike_msg)
+    # 📌 전략 판단 및 ATR 계산
+    tr = pd.concat([
+        df['high'] - df['low'],
+        (df['high'] - df['close'].shift()).abs(),
+        (df['low'] - df['close'].shift()).abs()
+    ], axis=1).max(axis=1)
+    df['atr'] = tr.rolling(14).mean()
+    atr = df['atr'].iloc[-1]
 
-    crash_msg = detect_crash(symbol, df)
-    if crash_msg:
-        messages.append(crash_msg)
+    current_price = fetch_current_price(symbol)
+    if current_price is None:
+        return None
 
-    # 📌 전략 분석 (롱/숏)
     direction, score = analyze_indicators(df)
-    if direction != 'NONE':
-        current_price = fetch_current_price(symbol)
-        if current_price is None:
-            return None
 
-        # ✅ ATR 계산
-        df['tr'] = pd.concat([
-            df['high'] - df['low'],
-            (df['high'] - df['close'].shift()).abs(),
-            (df['low'] - df['close'].shift()).abs()
-        ], axis=1).max(axis=1)
-        df['atr'] = df['tr'].rolling(14).mean()
-        atr = df['atr'].iloc[-1]
+    # 🔍 스파이크 조건 확인
+    spike_signals = detect_spike_conditions(df)
+    crash_signals = detect_crash_conditions(df)
 
-        if pd.isna(atr) or atr == 0:
-            print(f"⚠️ {symbol} ATR 계산 실패")
-            return None
+    if spike_signals:
+        msg = f"""🚨 {symbol.upper()} 급등 전조 감지
+- {'\n- '.join(spike_signals)}"""
+        if direction == 'LONG':
+            plan = generate_trade_plan(current_price, atr, direction)
+            msg += f"""
 
-        plan = generate_trade_plan(current_price, atr, direction)
-
-        # ✅ 방향별 메시지 이모지 구분
-        emoji = "📈" if direction == 'LONG' else "📉"
-
-        msg = f"""
-{emoji} {symbol.upper()} 기술 분석 (MEXC)
-🕒 최근 시세 기준
-💰 현재가: ${current_price:,.4f}
-
-▶️ 추천 방향: {direction}
+📌 전략 진입 조건: ✅ LONG 진입 고려 가능
 🎯 진입가: {plan['entry_range']}
 🛑 손절가: {plan['stop_loss']}
-🟢 익절가: {plan['take_profit']}
-        """
-        messages.append(msg.strip())
+🟢 익절가: {plan['take_profit']}"""
+        else:
+            msg += "\n\n📌 전략 진입 조건: ❌ 미충족 (관망 권장)"
+        messages.append(msg)
+
+    if crash_signals:
+        msg = f"""⚠️ {symbol.upper()} 급락 전조 감지
+- {'\n- '.join(crash_signals)}"""
+        if direction == 'SHORT':
+            plan = generate_trade_plan(current_price, atr, direction)
+            msg += f"""
+
+📌 전략 진입 조건: ✅ SHORT 진입 고려 가능
+🎯 진입가: {plan['entry_range']}
+🛑 손절가: {plan['stop_loss']}
+🟢 익절가: {plan['take_profit']}"""
+        else:
+            msg += "\n\n📌 전략 진입 조건: ❌ 미충족 (관망 권장)"
+        messages.append(msg)
 
     return messages if messages else None
