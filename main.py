@@ -36,8 +36,8 @@ def loop():
                 print(f"❌ {symbol} 분석 중 오류 발생: {e}", flush=True)
                 traceback.print_exc()  # ⬅️ 오류 상세 출력
 
-        print("⏱️ 15분 대기 중...\n" + "="*50, flush=True)
-        time.sleep(900)  # 15분 간격
+        print("⏱️ 10분 대기 중...\n" + "="*50, flush=True)
+        time.sleep(600)  # 10분 간격
 
 if __name__ == '__main__':
     Thread(target=loop, daemon=True).start()  # 백그라운드 스레드 실행
