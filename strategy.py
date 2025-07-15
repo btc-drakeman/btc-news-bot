@@ -41,15 +41,23 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
 
     return 'NONE', 0
 
-def generate_trade_plan(price: float, atr: float):
+def generate_trade_plan(price: float, atr: float, direction: str = 'LONG'):
     entry_low = price * 0.998
     entry_high = price * 1.002
 
-    stop_loss = price - atr * 1.5
-    take_profit = price + atr * 2.5
+    if direction == 'LONG':
+        stop_loss = price - atr * 1.5
+        take_profit = price + atr * 2.5
+    elif direction == 'SHORT':
+        stop_loss = price + atr * 1.5
+        take_profit = price - atr * 2.5
+    else:
+        stop_loss = price - atr * 1.5
+        take_profit = price + atr * 2.5
 
     return {
         'entry_range': f"${entry_low:,.4f} ~ ${entry_high:,.4f}",
         'stop_loss': f"${stop_loss:,.4f}",
         'take_profit': f"${take_profit:,.4f}"
     }
+

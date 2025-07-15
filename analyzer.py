@@ -84,7 +84,7 @@ def analyze_symbol(symbol: str):
             print(f"⚠️ {symbol} ATR 계산 실패")
             return None
 
-        plan = generate_trade_plan(current_price, atr)
+        plan = generate_trade_plan(current_price, atr, direction)
 
         # ✅ 방향별 메시지 이모지 구분
         emoji = "📈" if direction == 'LONG' else "📉"
