@@ -6,6 +6,7 @@ from notifier import send_telegram
 
 BASE_URL = 'https://api.mexc.com'
 
+
 def fetch_ohlcv(symbol: str, interval: str = '15m', limit: int = 100):
     endpoint = '/api/v3/klines'
     params = {
@@ -35,6 +36,7 @@ def fetch_ohlcv(symbol: str, interval: str = '15m', limit: int = 100):
         print(f"❌ {symbol} 데이터 불러오기 실패: {e}")
         return None
 
+
 def fetch_current_price(symbol: str):
     endpoint = '/api/v3/ticker/price'
     params = {'symbol': symbol}
@@ -46,6 +48,7 @@ def fetch_current_price(symbol: str):
     except Exception as e:
         print(f"❌ {symbol} 현재가 가져오기 실패: {e}")
         return None
+
 
 def analyze_symbol(symbol: str):
     from spike_detector import detect_spike_conditions, detect_crash_conditions
@@ -76,8 +79,9 @@ def analyze_symbol(symbol: str):
     crash_signals = detect_crash_conditions(df)
 
     if spike_signals:
+        signal_details = '\n- '.join(spike_signals)
         msg = f"""🚨 {symbol.upper()} 급등 전조 감지
-- {'\n- '.join(spike_signals)}"""
+- {signal_details}"""
         if direction == 'LONG':
             plan = generate_trade_plan(current_price, atr, direction)
             msg += f"""
@@ -91,8 +95,9 @@ def analyze_symbol(symbol: str):
         messages.append(msg)
 
     if crash_signals:
+        signal_details = '\n- '.join(crash_signals)
         msg = f"""⚠️ {symbol.upper()} 급락 전조 감지
-- {'\n- '.join(crash_signals)}"""
+- {signal_details}"""
         if direction == 'SHORT':
             plan = generate_trade_plan(current_price, atr, direction)
             msg += f"""
