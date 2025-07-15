@@ -23,12 +23,21 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     curr_vol = df["volume"].iloc[-1]
     vol_ma = df["volume_ma"].iloc[-1]
 
-    # ✅ LONG 조건 (v4 전략)
+    # ✅ LONG 조건
     if (
-        prev_close < prev_ema and curr_close > curr_ema and
+        prev_close < prev_ema and
+        curr_close > curr_ema and
         curr_vol > vol_ma * 1.5
     ):
         return 'LONG', 1
+
+    # 🔻 SHORT 조건
+    if (
+        prev_close > prev_ema and
+        curr_close < curr_ema and
+        curr_vol > vol_ma * 1.5
+    ):
+        return 'SHORT', 1
 
     return 'NONE', 0
 
