@@ -62,6 +62,30 @@ def analyze_symbol(symbol: str):
         (df['low'] - df['close'].shift()).abs()
     ], axis=1).max(axis=1)
     df['atr'] = tr.rolling(14).mean()
+    atr = df['atr'].iloc[-1]
+
+    current_price = fetch_current_price(symbol)
+    if current_price is None:
+        return None
+
+    # ✅ 전략 판단 메시지 (기본 루프 기반)
+    direction, score = analyze_indicators(df)
+    if direction != 'NONE':
+        entry_low = round(current_price * 0.995, 2)
+        entry_high = round(current_price * 1.005, 2)
+        stop_loss = round(current_price * 0.985, 2)
+        take_profit = round(current_price * 1.015, 2)
+
+        msg = f"""
+📊 {symbol} 기술 분석 결과
+🕒 최근 가격: ${current_price:.2f}
+
+🔵 추천 방향: {direction}
+💰 진입 권장가: ${entry_low} ~ ${entry_high}
+🛑 손절가: ${stop_loss}
+🎯 익절가: ${take_profit}
+"""
+        messages.append(msg)
 
     # 🔍 급등/급락 시그널 감지 및 메시지 생성
     spike_msgs = detect_spike_conditions(df)
