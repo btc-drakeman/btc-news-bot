@@ -43,7 +43,7 @@ def loop():
                 print(f"❌ {symbol} 분석 중 오류 발생: {e}", flush=True)
                 traceback.print_exc()
 
-        print(⏱️ 10분 대기 중...\n" + "="*50, flush=True)
+        print("⏱️ 10분 대기 중...\n" + "="*50, flush=True)
         time.sleep(600)
 
 if __name__ == '__main__':
