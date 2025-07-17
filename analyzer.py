@@ -71,10 +71,16 @@ def analyze_symbol(symbol: str):
     # ✅ 전략 판단 메시지 (기본 루프 기반)
     direction, score = analyze_indicators(df)
     if direction != 'NONE':
-        entry_low = round(current_price * 0.995, 2)
-        entry_high = round(current_price * 1.005, 2)
-        stop_loss = round(current_price * 0.985, 2)
-        take_profit = round(current_price * 1.015, 2)
+        if direction == 'LONG':
+            entry_low = round(current_price * 0.995, 2)
+            entry_high = round(current_price * 1.005, 2)
+            stop_loss = round(current_price * 0.985, 2)
+            take_profit = round(current_price * 1.015, 2)
+        elif direction == 'SHORT':
+            entry_low = round(current_price * 1.005, 2)
+            entry_high = round(current_price * 0.995, 2)
+            stop_loss = round(current_price * 1.015, 2)
+            take_profit = round(current_price * 0.985, 2)
 
         msg = f"""
 📊 {symbol} 기술 분석 결과
