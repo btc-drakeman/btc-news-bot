@@ -1,3 +1,4 @@
+
 import pandas as pd
 from datetime import datetime
 
@@ -35,7 +36,12 @@ def compute_adx(df, period=14):
 
 def detect_box_ranges_v3(df, window=30):
     df = df.copy()
-    df['timestamp'] = pd.to_datetime()
+
+    if 'open_time' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms')
+    else:
+        df['timestamp'] = df.index.to_pydatetime()
+
     df.set_index('timestamp', inplace=True)
 
     df['rsi'] = compute_rsi(df['close'])
@@ -95,7 +101,11 @@ def detect_box_trade_signal(df, symbol):
 
     latest_box = box_ranges[-1]
     current_price = df['close'].iloc[-1]
-    now = pd.to_datetime(df['open_time'].iloc[-1], unit='ms')
+
+    if 'open_time' in df.columns:
+        now = pd.to_datetime(df['open_time'].iloc[-1], unit='ms')
+    else:
+        now = df.index[-1].to_pydatetime()
 
     entry_message = None
     if abs(current_price - latest_box['low']) / latest_box['low'] < 0.002:
