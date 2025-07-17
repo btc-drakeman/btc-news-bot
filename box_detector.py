@@ -35,7 +35,7 @@ def compute_adx(df, period=14):
 
 def detect_box_ranges_v3(df, window=30):
     df = df.copy()
-    df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms')
+    df['timestamp'] = pd.to_datetime()
     df.set_index('timestamp', inplace=True)
 
     df['rsi'] = compute_rsi(df['close'])
