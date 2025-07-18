@@ -1,4 +1,3 @@
-
 import pandas as pd
 from datetime import datetime
 
@@ -108,14 +107,39 @@ def detect_box_trade_signal(df, symbol):
         now = df.index[-1].to_pydatetime()
 
     entry_message = None
+
+    # 하단 접근: LONG 신호
     if abs(current_price - latest_box['low']) / latest_box['low'] < 0.002:
+        signal = "LONG"
         tp = current_price + (current_price * 0.012)
         sl = current_price - (current_price * 0.018)
-        entry_message = f"📦 박스권 전략 감지 (/range)\n\n🔹 {symbol} 박스권 하단 접근\n📅 {now.strftime('%Y-%m-%d %H:%M')}\n\n💵 현재가: ${current_price:.4f}\n📈 상단: ${latest_box['high']:.4f}\n📉 하단: ${latest_box['low']:.4f}\n🎯 TP: ${tp:.4f}\n🛑 SL: ${sl:.4f}"
+        entry_message = (
+            f"📦 박스권 전략 감지 (/range)\n\n"
+            f"🔹 {symbol} 박스권 하단 접근\n"
+            f"▶️ Signal: {signal}\n"
+            f"📅 {now.strftime('%Y-%m-%d %H:%M')}\n\n"
+            f"💵 현재가: ${current_price:.4f}\n"
+            f"📈 상단:   ${latest_box['high']:.4f}\n"
+            f"📉 하단:   ${latest_box['low']:.4f}\n\n"
+            f"🎯 TP: ${tp:.4f}\n"
+            f"🛑 SL: ${sl:.4f}"
+        )
 
+    # 상단 접근: SHORT 신호
     elif abs(current_price - latest_box['high']) / latest_box['high'] < 0.002:
+        signal = "SHORT"
         tp = current_price - (current_price * 0.012)
         sl = current_price + (current_price * 0.018)
-        entry_message = f"📦 박스권 전략 감지 (/range)\n\n🔹 {symbol} 박스권 상단 접근\n📅 {now.strftime('%Y-%m-%d %H:%M')}\n\n💵 현재가: ${current_price:.4f}\n📈 상단: ${latest_box['high']:.4f}\n📉 하단: ${latest_box['low']:.4f}\n🎯 TP: ${tp:.4f}\n🛑 SL: ${sl:.4f}"
+        entry_message = (
+            f"📦 박스권 전략 감지 (/range)\n\n"
+            f"🔹 {symbol} 박스권 상단 접근\n"
+            f"▶️ Signal: {signal}\n"
+            f"📅 {now.strftime('%Y-%m-%d %H:%M')}\n\n"
+            f"💵 현재가: ${current_price:.4f}\n"
+            f"📈 상단:   ${latest_box['high']:.4f}\n"
+            f"📉 하단:   ${latest_box['low']:.4f}\n\n"
+            f"🎯 TP: ${tp:.4f}\n"
+            f"🛑 SL: ${sl:.4f}"
+        )
 
     return entry_message
