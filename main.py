@@ -1,10 +1,15 @@
+import os
+import sys
+# 프로젝트 루트(이 파일이 있는 디렉토리)를 모듈 경로에 추가
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from flask import Flask
 from threading import Thread
 from config import SYMBOLS
 from analyzer import analyze_symbol, fetch_ohlcv  # fetch_ohlcv 사용
 from notifier import send_telegram
 from box_detector import detect_box_trade_signal  # 박스권 전략
-from multi_factor_trend_strategy import run_multi_factor_live  # 멀티-팩터 전략 (root 경로)
+from multi_factor_trend_strategy import run_multi_factor_live  # 멀티-팩터 전략
 import time
 import traceback
 
