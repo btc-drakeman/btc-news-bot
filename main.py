@@ -4,7 +4,7 @@ from config import SYMBOLS
 from analyzer import analyze_symbol, fetch_ohlcv  # fetch_ohlcv 사용
 from notifier import send_telegram
 from box_detector import detect_box_trade_signal  # 박스권 전략
-from strategies.multi_factor_trend_strategy import run_multi_factor_live  # 멀티-팩터 전략
+from multi_factor_trend_strategy import run_multi_factor_live  # 멀티-팩터 전략 (root 경로)
 import time
 import traceback
 
