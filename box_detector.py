@@ -1,5 +1,4 @@
 import pandas as pd
-from datetime import datetime
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -101,11 +100,6 @@ def detect_box_trade_signal(df, symbol):
     latest_box = box_ranges[-1]
     current_price = df['close'].iloc[-1]
 
-    if 'open_time' in df.columns:
-        now = pd.to_datetime(df['open_time'].iloc[-1], unit='ms')
-    else:
-        now = df.index[-1].to_pydatetime()
-
     entry_message = None
 
     # 하단 접근: LONG 신호
@@ -116,8 +110,7 @@ def detect_box_trade_signal(df, symbol):
         entry_message = (
             f"📦 박스권 전략 감지 (/range)\n\n"
             f"🔹 {symbol} 박스권 하단 접근\n"
-            f"▶️ Signal: {signal}\n"
-            f"📅 {now.strftime('%Y-%m-%d %H:%M')}\n\n"
+            f"▶️ Signal: {signal}\n\n"
             f"💵 현재가: ${current_price:.4f}\n"
             f"📈 상단:   ${latest_box['high']:.4f}\n"
             f"📉 하단:   ${latest_box['low']:.4f}\n\n"
@@ -133,8 +126,7 @@ def detect_box_trade_signal(df, symbol):
         entry_message = (
             f"📦 박스권 전략 감지 (/range)\n\n"
             f"🔹 {symbol} 박스권 상단 접근\n"
-            f"▶️ Signal: {signal}\n"
-            f"📅 {now.strftime('%Y-%m-%d %H:%M')}\n\n"
+            f"▶️ Signal: {signal}\n\n"
             f"💵 현재가: ${current_price:.4f}\n"
             f"📈 상단:   ${latest_box['high']:.4f}\n"
             f"📉 하단:   ${latest_box['low']:.4f}\n\n"
