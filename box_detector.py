@@ -1,5 +1,9 @@
 import pandas as pd
 
+# Module-level state for breakout notifications
+_notified_breakouts = set()
+_last_box_start = None
+
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -92,6 +96,8 @@ def detect_box_ranges_v3(df, window=30):
 
 
 def detect_box_trade_signal(df, symbol):
+    global _notified_breakouts, _last_box_start
+
     df = df.copy()
     df['close'] = df['close'].astype(float)
     df['rsi'] = compute_rsi(df['close'])
@@ -102,29 +108,45 @@ def detect_box_trade_signal(df, symbol):
         return None
 
     latest_box = box_ranges[-1]
+    box_id = latest_box['start']  # unique identifier for the current box
+
+    # 새 박스가 시작되면 알림 기록 초기화
+    if box_id != _last_box_start:
+        _notified_breakouts.clear()
+        _last_box_start = box_id
+
     upper = latest_box['high']
     lower = latest_box['low']
     current_price = df['close'].iloc[-1]
-
-    # 브레이크아웃 감지: 상단 돌파
     breakout_thresh = 0.002
+
+    # 상단 브레이크아웃 감지
     if current_price > upper * (1 + breakout_thresh):
-        return (
-            f"📦 박스권 브레이크아웃 감지 (/range)\n\n"
-            f"🔹 {symbol} 박스권 상단 돌파\n"
-            f"▶️ Signal: NONE\n\n"
-            f"💵 현재가: ${current_price:.4f}\n"
-            f"📈 상단:   ${upper:.4f}\n"
-        )
-    # 브레이크아웃 감지: 하단 돌파
+        event = (box_id, 'upper')
+        if event not in _notified_breakouts:
+            _notified_breakouts.add(event)
+            return (
+                f"📦 박스권 브레이크아웃 감지 (/range)\n\n"
+                f"🔹 {symbol} 박스권 상단 돌파\n"
+                f"▶️ Signal: NONE\n\n"
+                f"💵 현재가: ${current_price:.4f}\n"
+                f"📈 상단:   ${upper:.4f}\n"
+            )
+        return None
+
+    # 하단 브레이크아웃 감지
     if current_price < lower * (1 - breakout_thresh):
-        return (
-            f"📦 박스권 브레이크아웃 감지 (/range)\n\n"
-            f"🔹 {symbol} 박스권 하단 돌파\n"
-            f"▶️ Signal: NONE\n\n"
-            f"💵 현재가: ${current_price:.4f}\n"
-            f"📉 하단:   ${lower:.4f}\n"
-        )
+        event = (box_id, 'lower')
+        if event not in _notified_breakouts:
+            _notified_breakouts.add(event)
+            return (
+                f"📦 박스권 브레이크아웃 감지 (/range)\n\n"
+                f"🔹 {symbol} 박스권 하단 돌파\n"
+                f"▶️ Signal: NONE\n\n"
+                f"💵 현재가: ${current_price:.4f}\n"
+                f"📉 하단:   ${lower:.4f}\n"
+            )
+        return None
 
     entry_message = None
 
