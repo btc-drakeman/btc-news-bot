@@ -1,5 +1,6 @@
 import pandas as pd
 
+
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0)
@@ -8,6 +9,7 @@ def compute_rsi(series, period=14):
     avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
+
 
 def compute_adx(df, period=14):
     high = df['high']
@@ -31,6 +33,7 @@ def compute_adx(df, period=14):
     dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
     adx = dx.ewm(span=period, min_periods=period).mean()
     return adx
+
 
 def detect_box_ranges_v3(df, window=30):
     df = df.copy()
@@ -87,6 +90,7 @@ def detect_box_ranges_v3(df, window=30):
 
     return box_ranges
 
+
 def detect_box_trade_signal(df, symbol):
     df = df.copy()
     df['close'] = df['close'].astype(float)
@@ -98,12 +102,34 @@ def detect_box_trade_signal(df, symbol):
         return None
 
     latest_box = box_ranges[-1]
+    upper = latest_box['high']
+    lower = latest_box['low']
     current_price = df['close'].iloc[-1]
+
+    # 브레이크아웃 감지: 상단 돌파
+    breakout_thresh = 0.002
+    if current_price > upper * (1 + breakout_thresh):
+        return (
+            f"📦 박스권 브레이크아웃 감지 (/range)\n\n"
+            f"🔹 {symbol} 박스권 상단 돌파\n"
+            f"▶️ Signal: NONE\n\n"
+            f"💵 현재가: ${current_price:.4f}\n"
+            f"📈 상단:   ${upper:.4f}\n"
+        )
+    # 브레이크아웃 감지: 하단 돌파
+    if current_price < lower * (1 - breakout_thresh):
+        return (
+            f"📦 박스권 브레이크아웃 감지 (/range)\n\n"
+            f"🔹 {symbol} 박스권 하단 돌파\n"
+            f"▶️ Signal: NONE\n\n"
+            f"💵 현재가: ${current_price:.4f}\n"
+            f"📉 하단:   ${lower:.4f}\n"
+        )
 
     entry_message = None
 
     # 하단 접근: LONG 신호
-    if abs(current_price - latest_box['low']) / latest_box['low'] < 0.002:
+    if abs(current_price - lower) / lower < breakout_thresh:
         signal = "LONG"
         tp = current_price + (current_price * 0.012)
         sl = current_price - (current_price * 0.018)
@@ -112,14 +138,13 @@ def detect_box_trade_signal(df, symbol):
             f"🔹 {symbol} 박스권 하단 접근\n"
             f"▶️ Signal: {signal}\n\n"
             f"💵 현재가: ${current_price:.4f}\n"
-            f"📈 상단:   ${latest_box['high']:.4f}\n"
-            f"📉 하단:   ${latest_box['low']:.4f}\n\n"
+            f"📈 상단:   ${upper:.4f}\n"
+            f"📉 하단:   ${lower:.4f}\n\n"
             f"🎯 TP: ${tp:.4f}\n"
             f"🛑 SL: ${sl:.4f}"
         )
-
     # 상단 접근: SHORT 신호
-    elif abs(current_price - latest_box['high']) / latest_box['high'] < 0.002:
+    elif abs(current_price - upper) / upper < breakout_thresh:
         signal = "SHORT"
         tp = current_price - (current_price * 0.012)
         sl = current_price + (current_price * 0.018)
@@ -128,8 +153,8 @@ def detect_box_trade_signal(df, symbol):
             f"🔹 {symbol} 박스권 상단 접근\n"
             f"▶️ Signal: {signal}\n\n"
             f"💵 현재가: ${current_price:.4f}\n"
-            f"📈 상단:   ${latest_box['high']:.4f}\n"
-            f"📉 하단:   ${latest_box['low']:.4f}\n\n"
+            f"📈 상단:   ${upper:.4f}\n"
+            f"📉 하단:   ${lower:.4f}\n\n"
             f"🎯 TP: ${tp:.4f}\n"
             f"🛑 SL: ${sl:.4f}"
         )
