@@ -7,3 +7,9 @@ API_URL = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}'
 
 # ✅ 분석 대상 심볼 (MEXC 선물 표기 기준)
 SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'ETHFIUSDT', 'SUIUSDT', 'XRPUSDT', 'DOGEUSDT', 'WLDUSDT', 'PEPEUSDT', 'SEIUSDT', 'LINKUSDT', 'APTUSDT', 'FLOKIUSDT']
+
+# 전략 분석 주기 (초)
+STRATEGY_INTERVAL_SECONDS = 600
+
+# 스파이크 감지 폴링 주기 (초)
+SPIKE_POLL_INTERVAL_SECONDS = 1
