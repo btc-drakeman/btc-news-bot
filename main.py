@@ -44,24 +44,46 @@ def strategy_loop():
 
 
 def spike_loop():
-    """
-    실시간으로 SYMBOLS 목록에 대해 급등/급락 조건을 감지하여
-    조건 충족 시 텔레그램으로 알림을 전송합니다.
-    """
     while True:
         for symbol in SYMBOLS:
             try:
                 data = fetch_market_data(symbol)
-                if detect_spike_conditions(data):
-                    msg = f"🚀 {symbol} 급등 조건 충족"
-                    print(f"📢 {msg}", flush=True)
-                    send_telegram(msg)
-                if detect_crash_conditions(data):
-                    msg = f"🔻 {symbol} 급락 조건 충족"
-                    print(f"📢 {msg}", flush=True)
-                    send_telegram(msg)
+                
+                # 급등(스파이크) 감지
+                spike_msgs = detect_spike_conditions(data)
+                if spike_msgs:
+                    msg = [f"🚀 [급등 신호]"]
+                    msg.extend(spike_msgs)
+                    msg.append('━━━━━━━━━━━━━━━━━━━')
+                    
+                    analysis_msgs = analyze_symbol(symbol)
+                    if analysis_msgs:
+                        msg.append("📊 [기술 분석]")
+                        if isinstance(analysis_msgs, list):
+                            msg.extend(analysis_msgs)
+                        else:
+                            msg.append(analysis_msgs)
+                    
+                    send_telegram('\n'.join(msg))
+                
+                # 급락(크래시) 감지
+                crash_msgs = detect_crash_conditions(data)
+                if crash_msgs:
+                    msg = [f"🔻 [급락 신호]"]
+                    msg.extend(crash_msgs)
+                    msg.append('━━━━━━━━━━━━━━━━━━━')
+                    
+                    analysis_msgs = analyze_symbol(symbol)
+                    if analysis_msgs:
+                        msg.append("📊 [기술 분석]")
+                        if isinstance(analysis_msgs, list):
+                            msg.extend(analysis_msgs)
+                        else:
+                            msg.append(analysis_msgs)
+                    
+                    send_telegram('\n'.join(msg))
             except Exception as e:
-                print(f"❌ {symbol} 스파이크 감지 중 오류 발생: {e}", flush=True)
+                print(f"❌ {symbol} 스파이크 감지 중 오류 발생: {e}")
                 traceback.print_exc()
 
         time.sleep(SPIKE_POLL_INTERVAL_SECONDS)
