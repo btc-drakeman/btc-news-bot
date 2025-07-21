@@ -59,6 +59,13 @@ def detect_spike_conditions(df):
     return messages if score >= 2 else None
 
 
+def detect_crash_conditions(df):
+    """
+    급락(스파이크 하락) 조건 감지 - 현재는 사용하지 않음, 필요 시 detect_spike_conditions와 병합 가능합니다.
+    """
+    return None
+
+
 def spike_loop():
     """
     지속적으로 스파이크 조건을 체크하고,
