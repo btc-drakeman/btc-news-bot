@@ -9,11 +9,7 @@ BASE_URL = 'https://api.mexc.com'
 
 def fetch_ohlcv(symbol: str, interval: str = '15m', limit: int = 100):
     endpoint = '/api/v3/klines'
-    params = {
-        'symbol': symbol,
-        'interval': interval,
-        'limit': limit
-    }
+    params = {'symbol': symbol, 'interval': interval, 'limit': limit}
 
     try:
         res = requests.get(BASE_URL + endpoint, params=params, timeout=10)
@@ -31,10 +27,12 @@ def fetch_ohlcv(symbol: str, interval: str = '15m', limit: int = 100):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         return df
-
     except Exception as e:
         print(f"❌ {symbol} 데이터 불러오기 실패: {e}")
         return None
+
+# Alias for market data fetching in main.py and spike detector
+fetch_market_data = fetch_ohlcv
 
 def fetch_current_price(symbol: str):
     endpoint = '/api/v3/ticker/price'
@@ -47,6 +45,7 @@ def fetch_current_price(symbol: str):
     except Exception as e:
         print(f"❌ {symbol} 현재가 가져오기 실패: {e}")
         return None
+
 
 def analyze_symbol(symbol: str):
     df = fetch_ohlcv(symbol)
@@ -68,7 +67,7 @@ def analyze_symbol(symbol: str):
     if current_price is None:
         return None
 
-    # ✅ 전략 판단 메시지 (기본 루프 기반)
+    # ✅ 전략 판단 메시지
     direction, score = analyze_indicators(df)
     if direction != 'NONE':
         entry_low = round(current_price * 0.995, 2)
@@ -87,7 +86,7 @@ def analyze_symbol(symbol: str):
 """
         messages.append(msg)
 
-    # 🔍 급등/급락 시그널 감지 및 메시지 생성
+    # 🔍 급등/급락 시그널 감지
     spike_msgs = detect_spike_conditions(df)
     if spike_msgs:
         messages.extend(spike_msgs)
