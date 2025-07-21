@@ -27,7 +27,7 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     if (
         prev_close < prev_ema and
         curr_close > curr_ema and
-        curr_vol > vol_ma * 1.5
+        curr_vol > vol_ma * 1.2
     ):
         return 'LONG', 1
 
@@ -35,7 +35,7 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     if (
         prev_close > prev_ema and
         curr_close < curr_ema and
-        curr_vol > vol_ma * 1.5
+        curr_vol > vol_ma * 1.2
     ):
         return 'SHORT', 1
 

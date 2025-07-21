@@ -46,6 +46,18 @@ def fetch_current_price(symbol: str):
         print(f"❌ {symbol} 현재가 가져오기 실패: {e}")
         return None
 
+# ✅ 추가: 가격대별 소수점 자리수 자동 조절 함수
+def format_price(price: float) -> str:
+    if price >= 1000:
+        return f"{price:.2f}"
+    elif price >= 1:
+        return f"{price:.3f}"
+    elif price >= 0.1:
+        return f"{price:.4f}"
+    elif price >= 0.01:
+        return f"{price:.5f}"
+    else:
+        return f"{price:.6f}"
 
 def analyze_symbol(symbol: str):
     df = fetch_ohlcv(symbol)
@@ -70,21 +82,28 @@ def analyze_symbol(symbol: str):
     # ✅ 전략 판단 메시지
     direction, score = analyze_indicators(df)
     if direction != 'NONE':
-        entry_low = round(current_price * 0.995, 2)
-        entry_high = round(current_price * 1.005, 2)
-        stop_loss = round(current_price * 0.985, 2)
-        take_profit = round(current_price * 1.015, 2)
+        if direction == 'LONG':
+            entry_low = current_price * 0.995
+            entry_high = current_price * 1.005
+            stop_loss = current_price * 0.985
+            take_profit = current_price * 1.015
+        elif direction == 'SHORT':
+            entry_low = current_price * 1.005
+            entry_high = current_price * 0.995
+            stop_loss = current_price * 1.015
+            take_profit = current_price * 0.985
 
         msg = f"""
 📊 {symbol} 기술 분석 결과
-🕒 최근 가격: ${current_price:.2f}
+🕒 최근 가격: ${format_price(current_price)}
 
 🔵 추천 방향: {direction}
-💰 진입 권장가: ${entry_low} ~ ${entry_high}
-🛑 손절가: ${stop_loss}
-🎯 익절가: ${take_profit}
+💰 진입 권장가: ${format_price(entry_low)} ~ ${format_price(entry_high)}
+🛑 손절가: ${format_price(stop_loss)}
+🎯 익절가: ${format_price(take_profit)}
 """
         messages.append(msg)
+
 
     # 🔍 급등/급락 시그널 감지
     spike_msgs = detect_spike_conditions(df)
