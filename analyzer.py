@@ -3,7 +3,6 @@ import pandas as pd
 from strategy import analyze_indicators, generate_trade_plan
 from config import SYMBOLS
 from notifier import send_telegram
-from spike_detector import detect_spike_conditions, detect_crash_conditions
 
 BASE_URL = 'https://api.mexc.com'
 
@@ -103,15 +102,5 @@ def analyze_symbol(symbol: str):
 🎯 익절가: ${format_price(take_profit)}
 """
         messages.append(msg)
-
-
-    # 🔍 급등/급락 시그널 감지
-    spike_msgs = detect_spike_conditions(df)
-    if spike_msgs:
-        messages.extend(spike_msgs)
-
-    crash_msgs = detect_crash_conditions(df)
-    if crash_msgs:
-        messages.extend(crash_msgs)
 
     return messages if messages else None
