@@ -1,6 +1,5 @@
 import time
 import pandas_ta as ta
-from analyzer import fetch_market_data
 from notifier import send_telegram
 from config import SYMBOLS
 
@@ -65,24 +64,30 @@ def spike_loop():
     지속적으로 스파이크 조건을 체크하고,
     조건 충족 시 ATR 기반 TP/SL을 포함한 알림 전송
     """
+    # fetch_market_data 로컬 임포트로 순환 참조 제거
+    from analyzer import fetch_market_data
+
     while True:
         for symbol in SYMBOLS:
-            df = fetch_market_data(symbol)
-            if df is None or df.empty:
-                continue
-            spike_msgs = detect_spike_conditions(df)
-            if spike_msgs:
-                entry = df['close'].iloc[-1]
-                atr   = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-1]
-                tp    = entry + atr * 1.5
-                sl    = entry - atr * 1.0
+            try:
+                df = fetch_market_data(symbol)
+                if df is None or df.empty:
+                    continue
+                spike_msgs = detect_spike_conditions(df)
+                if spike_msgs:
+                    entry = df['close'].iloc[-1]
+                    atr   = ta.atr(df['high'], df['low'], df['close'], length=14).iloc[-1]
+                    tp    = entry + atr * 1.5
+                    sl    = entry - atr * 1.0
 
-                # 메시지 조합
-                alert = [f"🚀 {symbol} 스파이크 신호 감지"]
-                alert.append(f"💡 진입가: {entry:.4f}")
-                alert.append(f"🎯 TP: {tp:.4f} (+1.5×ATR)")
-                alert.append(f"🛑 SL: {sl:.4f} (−1.0×ATR)")
-                alert.extend(spike_msgs)
+                    # 메시지 조합
+                    alert = [f"🚀 {symbol} 스파이크 신호 감지"]
+                    alert.append(f"💡 진입가: {entry:.4f}")
+                    alert.append(f"🎯 TP: {tp:.4f} (＋1.5×ATR)")
+                    alert.append(f"🛑 SL: {sl:.4f} (－1.0×ATR)")
+                    alert.extend(spike_msgs)
 
-                send_telegram("\n".join(alert))
+                    send_telegram("\n".join(alert))
+            except Exception as e:
+                print(f"🚨 spike_loop error - {symbol}: {e}")
         time.sleep(1)
