@@ -56,7 +56,7 @@ def analyze_multi_tf(symbol):
     df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
     df_15m = fetch_ohlcv(symbol, interval='15m', limit=100)
     df_5m = fetch_ohlcv(symbol, interval='5m', limit=100)
-    if None in (df_30m, df_15m, df_5m):
+    if df_30m is None or df_15m is None or df_5m is None:
         return None
 
     direction, entry_type = multi_frame_signal(df_30m, df_15m, df_5m)
