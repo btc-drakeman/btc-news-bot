@@ -54,27 +54,21 @@ def calc_atr(df, period=14):
 
 def analyze_multi_tf(symbol: str):
     """
-    1시간, 30분 상위 프레임 방향 필터 + 15분, 5분 하위프레임 진입 신호
+    30분 상위 프레임 방향 필터 + 15분, 5분 하위프레임 진입 신호
     ATR 기반 TP/SL 자동 산정, 진입방향/ATR 명확히 표기
     """
-    df_1h = fetch_ohlcv(symbol, interval='1h', limit=50)
     df_30m = fetch_ohlcv(symbol, interval='30m', limit=50)
     df_15m = fetch_ohlcv(symbol, interval='15m', limit=50)
     df_5m = fetch_ohlcv(symbol, interval='5m', limit=50)
 
-    if None in (df_1h, df_30m, df_15m, df_5m):
+    if None in (df_30m, df_15m, df_5m):
         return None
 
-    trend_1h = get_trend(df_1h)
     trend_30m = get_trend(df_30m)
-    if trend_1h != trend_30m:
-        return None
-
-    direction = 'LONG' if trend_1h == 'UP' else 'SHORT'
+    direction = 'LONG' if trend_30m == 'UP' else 'SHORT'
     if entry_signal(df_15m, direction) and entry_signal(df_5m, direction):
         price = df_5m["close"].iloc[-1]
         atr = calc_atr(df_5m)  # 5분봉 ATR 기준
-        # 계수(비율)는 실전에서 상황 맞게 수정 가능
         if direction == 'LONG':
             entry_low = price * 0.998
             entry_high = price * 1.002
@@ -89,7 +83,7 @@ def analyze_multi_tf(symbol: str):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         msg = (
             f"📈 [{now}] {symbol}\n\n"
-            f"진입 방향: {direction}  (상위프레임 {trend_1h}, 중하위프레임 {direction} 신호)\n\n"
+            f"진입 방향: {direction}  (상위프레임 {trend_30m}, 중하위프레임 {direction} 신호)\n\n"
             f"[진입 제안]\n"
             f"- 진입가: ${format_price(entry_low)} ~ ${format_price(entry_high)}\n"
             f"- 손절가(SL, ATR기반): ${format_price(stop_loss)}\n"
