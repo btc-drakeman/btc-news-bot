@@ -61,14 +61,18 @@ def analyze_multi_tf(symbol: str):
     df_15m = fetch_ohlcv(symbol, interval='15m', limit=50)
     df_5m = fetch_ohlcv(symbol, interval='5m', limit=50)
 
-    if None in (df_30m, df_15m, df_5m):
+    # 안전한 데이터 체크 (None 또는 빈 DataFrame)
+    if any(x is None or x.empty for x in (df_30m, df_15m, df_5m)):
+        print(f"❗️{symbol} - 데이터 누락/빈 데이터. 전략 스킵")
         return None
 
     trend_30m = get_trend(df_30m)
     direction = 'LONG' if trend_30m == 'UP' else 'SHORT'
+
     if entry_signal(df_15m, direction) and entry_signal(df_5m, direction):
         price = df_5m["close"].iloc[-1]
         atr = calc_atr(df_5m)  # 5분봉 ATR 기준
+
         if direction == 'LONG':
             entry_low = price * 0.998
             entry_high = price * 1.002
@@ -92,4 +96,5 @@ def analyze_multi_tf(symbol: str):
         )
         send_telegram(msg)
         return msg
+
     return None
