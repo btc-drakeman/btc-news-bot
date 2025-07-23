@@ -52,49 +52,35 @@ def calc_atr(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean().iloc[-1]
 
-def analyze_multi_tf(symbol: str):
-    """
-    30분 상위 프레임 방향 필터 + 15분, 5분 하위프레임 진입 신호
-    ATR 기반 TP/SL 자동 산정, 진입방향/ATR 명확히 표기
-    """
-    df_30m = fetch_ohlcv(symbol, interval='30m', limit=50)
-    df_15m = fetch_ohlcv(symbol, interval='15m', limit=50)
-    df_5m = fetch_ohlcv(symbol, interval='5m', limit=50)
-
-    # 안전한 데이터 체크 (None 또는 빈 DataFrame)
-    if any(x is None or x.empty for x in (df_30m, df_15m, df_5m)):
-        print(f"❗️{symbol} - 데이터 누락/빈 데이터. 전략 스킵")
+def analyze_multi_tf(symbol):
+    df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
+    df_15m = fetch_ohlcv(symbol, interval='15m', limit=100)
+    df_5m = fetch_ohlcv(symbol, interval='5m', limit=100)
+    if None in (df_30m, df_15m, df_5m):
         return None
 
-    trend_30m = get_trend(df_30m)
-    direction = 'LONG' if trend_30m == 'UP' else 'SHORT'
+    direction, entry_type = multi_frame_signal(df_30m, df_15m, df_5m)
+    if direction is None:
+        return None
 
-    if entry_signal(df_15m, direction) and entry_signal(df_5m, direction):
-        price = df_5m["close"].iloc[-1]
-        atr = calc_atr(df_5m)  # 5분봉 ATR 기준
+    price = df_5m['close'].iloc[-1]
+    atr = calc_atr(df_5m)
+    # TP/SL 레버리지 반영값으로 안내
+    lev = 20
+    if direction == 'LONG':
+        stop_loss = price - atr * 1.2
+        take_profit = price + atr * 2.5
+    else:
+        stop_loss = price + atr * 1.2
+        take_profit = price - atr * 2.5
 
-        if direction == 'LONG':
-            entry_low = price * 0.998
-            entry_high = price * 1.002
-            stop_loss = price - atr * 1.2
-            take_profit = price + atr * 2.5
-        else:
-            entry_low = price * 1.002
-            entry_high = price * 0.998
-            stop_loss = price + atr * 1.2
-            take_profit = price - atr * 2.5
-
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        msg = (
-            f"📈 [{now}] {symbol}\n\n"
-            f"진입 방향: {direction}  (상위프레임 {trend_30m}, 중하위프레임 {direction} 신호)\n\n"
-            f"[진입 제안]\n"
-            f"- 진입가: ${format_price(entry_low)} ~ ${format_price(entry_high)}\n"
-            f"- 손절가(SL, ATR기반): ${format_price(stop_loss)}\n"
-            f"- 익절가(TP, ATR기반): ${format_price(take_profit)}\n\n"
-            f"(ATR: ${format_price(atr)})"
-        )
-        send_telegram(msg)
-        return msg
-
-    return None
+    msg = f"""📈 [{symbol}]
+진입 방향: {direction} (레버리지 {lev}배)
+신호 근거: {entry_type}
+진입가: ${format_price(price)}
+손절가(SL): ${format_price(stop_loss)}
+익절가(TP): ${format_price(take_profit)}
+(ATR: {format_price(atr)}, {df_5m.index[-1]})
+"""
+    send_telegram(msg)
+    return msg
