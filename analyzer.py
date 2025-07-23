@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-from strategy import get_trend, entry_signal
+from strategy import get_trend, entry_signal_ema_only
 from config import SYMBOLS
 from notifier import send_telegram
 import datetime
