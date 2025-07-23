@@ -1,8 +1,9 @@
 import requests
 import pandas as pd
-from strategy import analyze_indicators, generate_trade_plan
+from strategy import get_trend, entry_signal
 from config import SYMBOLS
 from notifier import send_telegram
+import datetime
 
 BASE_URL = 'https://api.mexc.com'
 
@@ -45,7 +46,6 @@ def fetch_current_price(symbol: str):
         print(f"❌ {symbol} 현재가 가져오기 실패: {e}")
         return None
 
-# ✅ 추가: 가격대별 소수점 자리수 자동 조절 함수
 def format_price(price: float) -> str:
     if price >= 1000:
         return f"{price:.2f}"
@@ -58,49 +58,36 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.6f}"
 
-def analyze_symbol(symbol: str):
-    df = fetch_ohlcv(symbol)
-    if df is None or len(df) < 50:
+def analyze_multi_tf(symbol: str):
+    """
+    30분봉 방향에 따라 5분봉 LONG/SHORT 진입 신호를 판별해 텔레그램 알림 발송
+    """
+    # 30분봉 데이터
+    df_30m = fetch_ohlcv(symbol, interval='30m', limit=50)
+    if df_30m is None or len(df_30m) < 25:
         return None
 
-    messages = []
-
-    # 📌 ATR 계산
-    tr = pd.concat([
-        df['high'] - df['low'],
-        (df['high'] - df['close'].shift()).abs(),
-        (df['low'] - df['close'].shift()).abs()
-    ], axis=1).max(axis=1)
-    df['atr'] = tr.rolling(14).mean()
-    atr = df['atr'].iloc[-1]
-
-    current_price = fetch_current_price(symbol)
-    if current_price is None:
+    # 5분봉 데이터
+    df_5m = fetch_ohlcv(symbol, interval='5m', limit=50)
+    if df_5m is None or len(df_5m) < 25:
         return None
 
-    # ✅ 전략 판단 메시지
-    direction, score = analyze_indicators(df)
-    if direction != 'NONE':
-        if direction == 'LONG':
-            entry_low = current_price * 0.995
-            entry_high = current_price * 1.005
-            stop_loss = current_price * 0.985
-            take_profit = current_price * 1.015
-        elif direction == 'SHORT':
-            entry_low = current_price * 1.005
-            entry_high = current_price * 0.995
-            stop_loss = current_price * 1.015
-            take_profit = current_price * 0.985
+    trend = get_trend(df_30m)  # 'UP' 또는 'DOWN'
 
-        msg = f"""
-📊 {symbol} 기술 분석 결과
-🕒 최근 가격: ${format_price(current_price)}
+    direction = None
+    if trend == 'UP':
+        direction = 'LONG'
+    elif trend == 'DOWN':
+        direction = 'SHORT'
 
-🔵 추천 방향: {direction}
-💰 진입 권장가: ${format_price(entry_low)} ~ ${format_price(entry_high)}
-🛑 손절가: ${format_price(stop_loss)}
-🎯 익절가: ${format_price(take_profit)}
-"""
-        messages.append(msg)
-
-    return messages if messages else None
+    if direction and entry_signal(df_5m, direction):
+        price = df_5m["close"].iloc[-1]
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        msg = (
+            f"📈 [{now}] {symbol}\n"
+            f"30분봉 EMA20 {('상승장' if direction=='LONG' else '하락장')} + 5분봉 {direction} 진입 신호!\n"
+            f"최근가: ${format_price(price)}"
+        )
+        send_telegram(msg)
+        return msg
+    return None

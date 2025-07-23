@@ -1,21 +1,24 @@
 import pandas as pd
 
-def analyze_indicators(df: pd.DataFrame) -> tuple:
+def get_trend(df: pd.DataFrame) -> str:
+    """
+    30분봉 등에서 추세 방향을 문자열로 반환 ('UP' or 'DOWN')
+    """
+    df = df.copy()
+    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    if df["close"].iloc[-1] > df["ema20"].iloc[-1]:
+        return 'UP'
+    else:
+        return 'DOWN'
+
+def entry_signal(df: pd.DataFrame, direction: str) -> bool:
+    """
+    5분봉에서 지정 방향(LONG/SHORT) 진입 신호 판별
+    direction: 'LONG' 또는 'SHORT'
+    """
     df = df.copy()
     df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["volume_ma"] = df["volume"].rolling(20).mean()
-
-    high = df["high"]
-    low = df["low"]
-    close = df["close"]
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs()
-    ], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(14).mean()
-
-    # 📌 진입 판단용 최신값 추출
     prev_close = df["close"].iloc[-2]
     curr_close = df["close"].iloc[-1]
     prev_ema = df["ema20"].iloc[-2]
@@ -23,41 +26,20 @@ def analyze_indicators(df: pd.DataFrame) -> tuple:
     curr_vol = df["volume"].iloc[-1]
     vol_ma = df["volume_ma"].iloc[-1]
 
-    # ✅ LONG 조건
-    if (
-        prev_close < prev_ema and
-        curr_close > curr_ema and
-        curr_vol > vol_ma * 1.2
-    ):
-        return 'LONG', 1
-
-    # 🔻 SHORT 조건
-    if (
-        prev_close > prev_ema and
-        curr_close < curr_ema and
-        curr_vol > vol_ma * 1.2
-    ):
-        return 'SHORT', 1
-
-    return 'NONE', 0
-
-def generate_trade_plan(price: float, atr: float, direction: str = 'LONG'):
-    entry_low = price * 0.998
-    entry_high = price * 1.002
-
     if direction == 'LONG':
-        stop_loss = price - atr * 1.5
-        take_profit = price + atr * 2.5
+        # 직전봉 < EMA, 현재봉 > EMA, 거래량 급증
+        if (
+            prev_close < prev_ema and
+            curr_close > curr_ema and
+            curr_vol > vol_ma * 1.2
+        ):
+            return True
     elif direction == 'SHORT':
-        stop_loss = price + atr * 1.5
-        take_profit = price - atr * 2.5
-    else:
-        stop_loss = price - atr * 1.5
-        take_profit = price + atr * 2.5
-
-    return {
-        'entry_range': f"${entry_low:,.4f} ~ ${entry_high:,.4f}",
-        'stop_loss': f"${stop_loss:,.4f}",
-        'take_profit': f"${take_profit:,.4f}"
-    }
-
+        # 직전봉 > EMA, 현재봉 < EMA, 거래량 급증
+        if (
+            prev_close > prev_ema and
+            curr_close < curr_ema and
+            curr_vol > vol_ma * 1.2
+        ):
+            return True
+    return False
