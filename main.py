@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, send_from_directory
 from threading import Thread
 from config import SYMBOLS
 from analyzer import analyze_multi_tf
@@ -13,6 +13,14 @@ app = Flask(__name__)
 @app.route('/')
 def home():
     return "🟢 봇 실행 중"
+
+@app.route('/logs/full')
+def download_full_csv():
+    return send_from_directory("simulation_logs", "results_export.csv", as_attachment=True)
+
+@app.route('/logs/<symbol>.csv')
+def download_coin_csv(symbol):
+    return send_from_directory("simulation_logs/export_by_coin", f"{symbol}.csv", as_attachment=True)
 
 def strategy_loop():
     """
