@@ -55,8 +55,32 @@ def update_balance(pnl):
     with open(BALANCE_FILE, 'w') as f:
         f.write(str(balance))
 
-# 진입 포지션 기록
+# 현재 열린 포지션 조회
+def get_open_position(symbol):
+    positions = load_positions()
+    for p in positions:
+        if p['symbol'] == symbol and p['status'] == 'OPEN':
+            return p
+    return None
+
+# 진입 포지션 기록 (기존보다 score 높으면 교체)
 def add_virtual_trade(entry):
+    current = get_open_position(entry['symbol'])
+    new_score = entry.get('score', 0)
+
+    if current:
+        current_score = current.get('score', 0)
+        if new_score > current_score:
+            # 기존 포지션 종료 처리
+            current['status'] = 'CLOSED_BY_SIGNAL'
+            current['close_time'] = datetime.now().isoformat()
+            current['pnl'] = 0  # 중립 종료
+            save_result(current, current)
+            print(f"🔁 [전환] {entry['symbol']} 기존 포지션 종료 후 점수 높은 신호로 진입")
+        else:
+            print(f"⛔ {entry['symbol']} 기존 포지션 점수가 더 높거나 같음 → 진입 무시")
+            return
+
     positions = load_positions()
     entry['open_time'] = datetime.now().isoformat()
     entry['status'] = 'OPEN'
