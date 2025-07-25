@@ -52,6 +52,24 @@ def calc_atr(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean().iloc[-1]
 
+# 추가: entry_type에서 score 추출
+def extract_score(entry_type: str) -> int:
+    try:
+        return int(entry_type.split('score=')[1].split('/')[0])
+    except:
+        return 0
+
+# 추가: score → 시각적 별점 + 설명
+def map_score_to_stars(score: int) -> str:
+    if score == 5:
+        return "★★★★★ (5점 - 강력 추천)"
+    elif score == 4:
+        return "★★★★☆ (4점 - 전략 조건 우수)"
+    elif score == 3:
+        return "★★★☆☆ (3점 - 전략 기준 충족)"
+    else:
+        return "(조건 미달)"
+
 def analyze_multi_tf(symbol):
     df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
     df_15m = fetch_ohlcv(symbol, interval='15m', limit=100)
@@ -65,22 +83,29 @@ def analyze_multi_tf(symbol):
 
     price = df_5m['close'].iloc[-1]
     atr = calc_atr(df_5m)
-    # TP/SL 레버리지 반영값으로 안내
     lev = 20
+
     if direction == 'LONG':
         stop_loss = price - atr * 1.2
         take_profit = price + atr * 2.5
+        symbol_prefix = "📈"
     else:
         stop_loss = price + atr * 1.2
         take_profit = price - atr * 2.5
+        symbol_prefix = "📉"
 
-    msg = f"""📈 [{symbol}]
-진입 방향: {direction} (레버리지 {lev}배)
-신호 근거: {entry_type}
-진입가: ${format_price(price)}
-손절가(SL): ${format_price(stop_loss)}
-익절가(TP): ${format_price(take_profit)}
-(ATR: {format_price(atr)}, {df_5m.index[-1]})
+    score = extract_score(entry_type)
+    stars = map_score_to_stars(score)
+
+    msg = f"""{symbol_prefix} [{symbol}]
+🎯 진입 방향: {direction} (레버리지 {lev}배)
+💡 추천 진입 강도: {stars}
+
+📊 신호 근거: {entry_type}
+💵 진입가: ${format_price(price)}
+🛑 손절가(SL): ${format_price(stop_loss)}
+🎯 익절가(TP): ${format_price(take_profit)}
+⏱️ (ATR: {format_price(atr)}, {df_5m.index[-1]})
 """
     send_telegram(msg)
     return msg
