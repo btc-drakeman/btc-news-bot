@@ -2,6 +2,8 @@ from flask import Flask
 from threading import Thread
 from config import SYMBOLS
 from analyzer import analyze_multi_tf
+from price_fetcher import get_all_prices
+from simulator import check_positions
 import time
 import traceback
 import datetime
@@ -48,7 +50,22 @@ def strategy_loop():
                 already_ran = set(list(already_ran)[-1000:])
         time.sleep(5)
 
+def monitor_price_loop():
+    """
+    실시간 가격을 주기적으로 확인하여 TP/SL 조건 충족 여부 판단
+    """
+    print("📡 실시간 가격 감시 루프 시작")
+    while True:
+        try:
+            prices = get_all_prices(SYMBOLS)
+            check_positions(prices)
+        except Exception as e:
+            print(f"⚠️ 가격 감시 오류: {e}")
+        time.sleep(30)  # 30초마다 확인
+
 if __name__ == '__main__':
     t1 = Thread(target=strategy_loop, daemon=True)
+    t2 = Thread(target=monitor_price_loop, daemon=True)
     t1.start()
+    t2.start()
     app.run(host='0.0.0.0', port=8080)
