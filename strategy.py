@@ -73,7 +73,7 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if bollinger_check: score += 1
     if volume_check: score += 1
 
-    if score >= 3:
+    if score >= 2:
         entry_type = f"score={score}/EMA:{cond_15m}+{cond_5m}/RSI:{int(rsi)}/VOL:{volume_check}"
         return direction, entry_type
     else:
