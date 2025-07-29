@@ -3,6 +3,7 @@ import pandas as pd
 from strategy import get_trend, entry_signal_ema_only, multi_frame_signal
 from config import SYMBOLS
 from notifier import send_telegram
+from simulator import add_virtual_trade    # ← 이 줄 추가
 import datetime
 
 BASE_URL = 'https://api.mexc.com'
@@ -105,6 +106,20 @@ def analyze_multi_tf(symbol):
 
     score = extract_score(entry_type)
     stars = map_score_to_stars(score)
+
+    # ─────────────────────────────────────────────────────────
+    # ↓ 여기부터 추가된 부분 (기존 로직 건드리지 마세요)
+    entry = {
+        "symbol": symbol,
+        "direction": direction,
+        "entry": price,
+        "tp": take_profit,
+        "sl": stop_loss,
+        "score": score
+    }
+    add_virtual_trade(entry)
+    # ↑ 여기까지
+    # ─────────────────────────────────────────────────────────
 
     msg = f"""{symbol_prefix} [{symbol}]
 🎯 진입 방향: {direction} (레버리지 {lev}배)
