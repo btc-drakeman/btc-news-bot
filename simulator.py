@@ -41,7 +41,6 @@ def save_result(entry, result):
     if os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, 'r') as f:
             data = json.load(f)
-    # result dict may include updated fields (pnl, real_pnl, current_balance, etc.)
     data.append({**entry, **result})
     with open(RESULTS_FILE, 'w') as f:
         json.dump(data, f, indent=2)
@@ -64,7 +63,10 @@ def get_open_position(symbol):
             return p
     return None
 
-# 진입 포지션 기록 (기존보다 score 높으면 교체)
+from price_fetcher import get_current_price  # 시장가 청산용
+
+# 진입 포지션 기록 및 반대 시그널 처리
+# (기존보다 score 높으면 교체, 이때 시장가로 청산)
 def add_virtual_trade(entry):
     current = get_open_position(entry['symbol'])
     new_score = entry.get('score', 0)
@@ -72,16 +74,39 @@ def add_virtual_trade(entry):
     if current:
         current_score = current.get('score', 0)
         if new_score > current_score:
-            # 기존 포지션 종료 처리
+            # 반대 포지션 진입으로 기존 포지션 시장가 청산
+            close_price = get_current_price(current['symbol']) or current['entry']
+            if current['direction'] == 'LONG':
+                pnl = (close_price - current['entry']) * 20
+            else:
+                pnl = (current['entry'] - close_price) * 20
             current['status'] = 'CLOSED_BY_SIGNAL'
             current['close_time'] = datetime.now().isoformat()
-            current['pnl'] = 0  # 중립 종료
+            current['pnl'] = round(pnl, 4)
+
+            # real_pnl 및 current_balance 계산
+            position_size = INITIAL_BALANCE * 20
+            qty = position_size / current['entry']
+            if current['direction'] == 'SHORT':
+                real_pnl = (current['entry'] - close_price) * qty
+            else:
+                real_pnl = (close_price - current['entry']) * qty
+            real_pnl = round(real_pnl, 4)
+            current['real_pnl'] = real_pnl
+
+            with open(BALANCE_FILE, 'r') as f:
+                balance = float(f.read())
+            updated_balance = balance + real_pnl
+            current['current_balance'] = round(updated_balance, 4)
+
             save_result(current, current)
-            print(f"🔁 [전환] {entry['symbol']} 기존 포지션 종료 후 점수 높은 신호로 진입")
+            update_balance(real_pnl)
+            print(f"🔁 [전환 종료] {current['symbol']} 중간 청산 → PnL: {real_pnl:.4f}, Balance: {updated_balance:.4f}")
         else:
             print(f"⛔ {entry['symbol']} 기존 포지션 점수가 더 높거나 같음 → 진입 무시")
             return
 
+    # 새로운 포지션 진입 기록
     positions = load_positions()
     entry['open_time'] = datetime.now().isoformat()
     entry['status'] = 'OPEN'
@@ -106,7 +131,7 @@ def check_positions(current_prices: dict):
         pnl = 0.0
         if p['direction'] == 'LONG':
             if price >= p['tp']:
-                pnl = (p['tp'] - p['entry']) * 20  # 레버리지 20배
+                pnl = (p['tp'] - p['entry']) * 20
                 p['status'] = 'TP'
             elif price <= p['sl']:
                 pnl = (p['sl'] - p['entry']) * 20
