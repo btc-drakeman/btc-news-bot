@@ -48,7 +48,6 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.9f}"
 
-
 def calc_atr(df, period=14):
     high = df['high']
     low = df['low']
@@ -107,6 +106,12 @@ def analyze_multi_tf(symbol):
     score = extract_score(entry_type)
     stars = map_score_to_stars(score)
 
+    # 📐 수익/손실 비율 계산
+    reward = abs(take_profit - price)
+    risk = abs(price - stop_loss)
+    rr_ratio = reward / risk if risk != 0 else 0
+    rr_label = f"⚠ 수익/손실 비율: {rr_ratio:.2f}" if rr_ratio < 1.2 else f"📐 수익/손실 비율: {rr_ratio:.2f}"
+
     # ─────────────────────────────────────────────────────────
     # ↓ 여기부터 추가된 부분 (기존 로직 건드리지 마세요)
     entry = {
@@ -129,6 +134,7 @@ def analyze_multi_tf(symbol):
 💵 진입가: ${format_price(price)}
 🛑 손절가(SL): ${format_price(stop_loss)}
 🎯 익절가(TP): ${format_price(take_profit)}
+{rr_label}
 ⏱️ (ATR: {format_price(atr)}, {df_5m.index[-1]})
 """
     send_telegram(msg)
