@@ -67,6 +67,8 @@ def map_score_to_stars(score: int) -> str:
         return "★★★★☆ (4점 - 전략 조건 우수)"
     elif score == 3:
         return "★★★☆☆ (3점 - 전략 기준 충족)"
+    elif score == 2:
+        return "★★☆☆☆ (2점 - 약한 진입 신호)"
     else:
         return "(조건 미달)"
 
