@@ -41,7 +41,8 @@ def save_result(entry, result):
     if os.path.exists(RESULTS_FILE):
         with open(RESULTS_FILE, 'r') as f:
             data = json.load(f)
-    data.append(result | entry)
+    # result dict may include updated fields (pnl, real_pnl, current_balance, etc.)
+    data.append({**entry, **result})
     with open(RESULTS_FILE, 'w') as f:
         json.dump(data, f, indent=2)
     export_results_to_csv(data)
@@ -59,7 +60,7 @@ def update_balance(pnl):
 def get_open_position(symbol):
     positions = load_positions()
     for p in positions:
-        if p['symbol'] == symbol and p['status'] == 'OPEN':
+        if p.get('symbol') == symbol and p.get('status') == 'OPEN':
             return p
     return None
 
@@ -93,16 +94,16 @@ def check_positions(current_prices: dict):
     positions = load_positions()
     updated = []
     for p in positions:
-        if p['status'] != 'OPEN':
+        if p.get('status') != 'OPEN':
             updated.append(p)
             continue
         symbol = p['symbol']
         price = current_prices.get(symbol)
-        if not price:
+        if price is None:
             updated.append(p)
             continue
 
-        pnl = 0
+        pnl = 0.0
         if p['direction'] == 'LONG':
             if price >= p['tp']:
                 pnl = (p['tp'] - p['entry']) * 20  # 레버리지 20배
@@ -121,9 +122,25 @@ def check_positions(current_prices: dict):
         if p['status'] in ('TP', 'SL'):
             p['close_time'] = datetime.now().isoformat()
             p['pnl'] = round(pnl, 4)
+
+            # 💰 실질 수익 계산 (기본 자본 100 USDT × 레버리지 20)
+            position_size = INITIAL_BALANCE * 20
+            qty = position_size / p['entry']
+            if p['status'] == 'TP':
+                real_pnl = (p['entry'] - p['tp']) * qty if p['direction'] == 'SHORT' else (p['tp'] - p['entry']) * qty
+            else:
+                real_pnl = (p['sl'] - p['entry']) * qty if p['direction'] == 'SHORT' else (p['entry'] - p['sl']) * qty
+            p['real_pnl'] = round(real_pnl, 4)
+
+            # 💵 잔고 반영 및 기록
+            with open(BALANCE_FILE, 'r') as f:
+                balance = float(f.read())
+            updated_balance = balance + real_pnl
+            p['current_balance'] = round(updated_balance, 4)
+
             save_result(p, p)
-            update_balance(pnl)
-            print(f"✅ [포지션 종료] {symbol} {p['status']} | PnL: {pnl:.4f}")
+            update_balance(real_pnl)
+            print(f"✅ [포지션 종료] {symbol} {p['status']} | Real PnL: {real_pnl:.4f}, Balance: {updated_balance:.4f}")
         updated.append(p)
 
     save_positions(updated)
@@ -134,7 +151,7 @@ def export_results_to_csv(results):
         return
     keys = [
         'symbol', 'direction', 'entry', 'tp', 'sl', 'score', 'status',
-        'pnl', 'open_time', 'close_time'
+        'pnl', 'real_pnl', 'current_balance', 'open_time', 'close_time'
     ]
     with open(CSV_EXPORT_FILE, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=keys)
@@ -151,13 +168,11 @@ def export_results_by_coin(results):
         symbol = row.get('symbol')
         if not symbol:
             continue
-        if symbol not in coins:
-            coins[symbol] = []
-        coins[symbol].append(row)
+        coins.setdefault(symbol, []).append(row)
 
     keys = [
         'symbol', 'direction', 'entry', 'tp', 'sl', 'score', 'status',
-        'pnl', 'open_time', 'close_time'
+        'pnl', 'real_pnl', 'current_balance', 'open_time', 'close_time'
     ]
 
     for symbol, rows in coins.items():
