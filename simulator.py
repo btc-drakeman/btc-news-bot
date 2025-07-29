@@ -66,15 +66,22 @@ def get_open_position(symbol):
 from price_fetcher import get_current_price  # 시장가 청산용
 
 # 진입 포지션 기록 및 반대 시그널 처리
-# (기존보다 score 높으면 교체, 이때 시장가로 청산)
+# (방향이 다르고 점수가 같거나 높거나 OR 같은 방향인데 점수 더 높을 때 교체)
 def add_virtual_trade(entry):
     current = get_open_position(entry['symbol'])
     new_score = entry.get('score', 0)
 
     if current:
         current_score = current.get('score', 0)
-        if new_score > current_score:
-            # 반대 포지션 진입으로 기존 포지션 시장가 청산
+        should_replace = False
+
+        if entry['direction'] != current['direction'] and new_score >= current_score:
+            should_replace = True
+        elif entry['direction'] == current['direction'] and new_score > current_score:
+            should_replace = True
+
+        if should_replace:
+            # 반대 포지션 진입 또는 점수 높은 시그널로 기존 포지션 시장가 청산
             close_price = get_current_price(current['symbol']) or current['entry']
             if current['direction'] == 'LONG':
                 pnl = (close_price - current['entry']) * 20
@@ -103,7 +110,7 @@ def add_virtual_trade(entry):
             update_balance(real_pnl)
             print(f"🔁 [전환 종료] {current['symbol']} 중간 청산 → PnL: {real_pnl:.4f}, Balance: {updated_balance:.4f}")
         else:
-            print(f"⛔ {entry['symbol']} 기존 포지션 점수가 더 높거나 같음 → 진입 무시")
+            print(f"⛔ {entry['symbol']} 기존 포지션 조건이 더 우세 → 진입 무시")
             return
 
     # 새로운 포지션 진입 기록
