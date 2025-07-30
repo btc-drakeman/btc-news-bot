@@ -83,6 +83,10 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     df_5m["rsi"] = calc_rsi(df_5m)
     rsi = df_5m["rsi"].iloc[-1]
 
+    # ✅ 숏인데 RSI가 너무 낮으면 진입 배제
+    if direction == "SHORT" and rsi < 45:
+        return None, None
+
     bollinger_check = is_bollinger_breakout(df_5m)
     volume_check = is_volume_spike(df_5m)
 
