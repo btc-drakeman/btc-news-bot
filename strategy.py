@@ -69,6 +69,16 @@ def is_volume_spike(df):
     avg = df['volume'].rolling(window=20).mean().iloc[-1]
     return recent > avg * 1.5
 
+# 최근 3분간 거래량 및 변동성 저조 여부 판단
+def is_recent_market_weak(df):
+    if len(df) < 3:
+        return False
+    last_3 = df[-3:]
+    price_range = last_3['high'].max() - last_3['low'].min()
+    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
+    recent_volume = last_3['volume'].mean()
+    return price_range < df['close'].iloc[-1] * 0.002 and recent_volume < avg_volume * 0.5
+
 # 최종 시그널
 def multi_frame_signal(df_30m, df_15m, df_5m):
     trend_30m = get_trend(df_30m)
@@ -85,6 +95,10 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
 
     # ✅ 숏인데 RSI가 너무 낮으면 진입 배제
     if direction == "SHORT" and rsi < 45:
+        return None, None
+
+    # ✅ 진입 직전 3분간 시장 약세 필터
+    if is_recent_market_weak(df_5m):
         return None, None
 
     bollinger_check = is_bollinger_breakout(df_5m)
