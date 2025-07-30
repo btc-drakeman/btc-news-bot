@@ -1,7 +1,7 @@
 # config.py
 
 # ✅ 텔레그램 봇 설정
-TELEGRAM_TOKEN = '7213273799:AAEi6KtkzHqwKkrsQgaxSgKSnRWbXM70gUA'
+TELEGRAM_TOKEN = '7213273799:AAEcuDAiureO1jY32JMtELcWsoJjHub5Pv0'
 TELEGRAM_CHAT_ID = ['7505401062', '7576776181']
 API_URL = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}'
 
