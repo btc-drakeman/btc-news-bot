@@ -116,6 +116,10 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if volume_check:
         raw_score += 1
 
+    # ✅ EMA 둘 다 False일 경우 감점
+    if not cond_15m and not cond_5m:
+        raw_score -= 1
+
     # 최종 판단용 정수 점수 (반올림)
     final_score = round(raw_score)
 
