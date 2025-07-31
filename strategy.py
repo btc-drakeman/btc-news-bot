@@ -101,6 +101,10 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if is_recent_market_weak(df_5m):
         return None, None
 
+    # ✅ 혼조 + RSI < 25 → 위험한 롱 진입 차단
+    if cond_15m != cond_5m and rsi < 25:
+        return None, None
+
     bollinger_check = is_bollinger_breakout(df_5m)
     volume_check = is_volume_spike(df_5m)
 
