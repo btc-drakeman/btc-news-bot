@@ -116,10 +116,8 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if volume_check:
         raw_score += 1
 
-    # ✅ EMA 조건에 따른 방향별 감점
-    if direction == "LONG" and not cond_15m and not cond_5m:
-        raw_score -= 1
-    elif direction == "SHORT" and cond_15m and cond_5m:
+    # ✅ EMA 조건 감점: 둘 다 False일 경우 무조건 감점
+    if not cond_15m and not cond_5m:
         raw_score -= 1
 
     # 최종 판단용 정수 점수 (반올림)
