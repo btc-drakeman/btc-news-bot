@@ -81,8 +81,8 @@ def is_recent_market_weak(df):
 
 # 최종 시그널
 def multi_frame_signal(df_30m, df_15m, df_5m):
-    trend_30m = get_trend(df_30m)
-    direction = 'LONG' if trend_30m == 'UP' else 'SHORT'
+    trend_15m = get_trend(df_15m)
+    direction = 'LONG' if trend_15m == 'UP' else 'SHORT'
 
     # EMA 조건
     cond_15m = entry_signal_ema_only(df_15m, direction)
