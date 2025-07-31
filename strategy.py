@@ -116,9 +116,11 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if volume_check:
         raw_score += 1
 
-    # ✅ EMA 조건 감점: 둘 다 False일 경우 무조건 감점
+    # ✅ EMA 조건 감점
     if not cond_15m and not cond_5m:
-        raw_score -= 1
+        raw_score -= 1     # 확실히 아닌 조건은 강하게 감점
+    elif cond_15m != cond_5m:
+        raw_score -= 0.5   # 혼조 상태는 약하게 감점
 
     # 최종 판단용 정수 점수 (반올림)
     final_score = round(raw_score)
