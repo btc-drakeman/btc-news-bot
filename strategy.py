@@ -120,14 +120,12 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if not cond_15m and not cond_5m:
         raw_score -= 1     # 확실히 아닌 조건은 강하게 감점
     elif cond_15m != cond_5m:
-        raw_score -= 0.5   # 혼조 상태는 약하게 감점
+        raw_score -= 0.3   # 혼조 상태는 완화된 감점
 
-    # 최종 판단용 정수 점수 (반올림)
-    final_score = round(raw_score)
-
-    if final_score >= 2:
+    # 최종 판단용 점수 기준 (반올림 제거)
+    if raw_score >= 2.0:
         entry_type = (
-            f"score={final_score}/"
+            f"score={round(raw_score)}/"
             f"EMA:{cond_15m}+{cond_5m}/"
             f"RSI:{int(rsi)}/VOL:{volume_check}"
         )
