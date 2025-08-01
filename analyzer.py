@@ -4,6 +4,7 @@ from strategy import get_trend, entry_signal_ema_only, multi_frame_signal
 from config import SYMBOLS
 from notifier import send_telegram
 from simulator import add_virtual_trade
+from sl_hunt_monitor import check_sl_hunt_alert  # ✅ SL 헌팅 통합
 import datetime
 
 BASE_URL = 'https://api.mexc.com'
@@ -77,7 +78,6 @@ def map_score_to_stars(score: int) -> str:
     else:
         return "(조건 미달)"
 
-# ✅ 전략 점수 기반 SL/TP 배율 설정
 def get_sl_tp_multipliers(score: int):
     if score >= 5:
         return 1.0, 3.0
@@ -118,7 +118,6 @@ def analyze_multi_tf(symbol):
         take_profit = price - atr * tp_mult
         symbol_prefix = "📉"
 
-    # 수익/손실 비율 계산
     reward = abs(take_profit - price)
     risk = abs(price - stop_loss)
     rr_ratio = reward / risk if risk != 0 else 0
@@ -143,7 +142,11 @@ def analyze_multi_tf(symbol):
 🛑 손절가(SL): ${format_price(stop_loss)}
 🎯 익절가(TP): ${format_price(take_profit)}
 {rr_label}
-⏱️ (ATR: {format_price(atr)}, {df_5m.index[-1]})
-"""
+⏱️ (ATR: {format_price(atr)}, {df_5m.index[-1]})"""
+
+    sl_alert_msg = check_sl_hunt_alert(symbol)
+    if sl_alert_msg:
+        msg += f"\n\n{sl_alert_msg}"
+
     send_telegram(msg)
     return msg

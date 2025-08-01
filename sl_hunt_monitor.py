@@ -2,7 +2,6 @@
 
 import pandas as pd
 import requests
-from notifier import send_telegram
 from price_fetcher import get_current_price
 from strategy import get_trend
 
@@ -55,87 +54,50 @@ def detect_sl_hunt(df, threshold=0.35, lookback=20):
             signals.append((df.index[i], 'LONG', curr['low']))
     return signals
 
-# 데이터 불러오기
-def fetch_ohlcv(symbol: str, interval: str = '15m', limit: int = 100):
-    endpoint = '/api/v3/klines'
-    params = {'symbol': symbol, 'interval': interval, 'limit': limit}
+# 보조 타임프레임 조건 확인 (도지형 캔들)
+def confirm_on_lower(df):
+    last = df.iloc[-1]
+    wick = abs(last['high'] - last['low'])
+    body = abs(last['close'] - last['open'])
+    return body / wick < 0.25
+
+# SL 헌팅 통합 검사 함수 (진입 전략 후 호출용)
+def check_sl_hunt_alert(symbol):
     try:
-        res = requests.get(BASE_URL + endpoint, params=params, timeout=10)
-        res.raise_for_status()
-        raw = res.json()
-        df = pd.DataFrame(raw, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_volume'
-        ])
-        df['open'] = df['open'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['close'] = df['close'].astype(float)
-        df['volume'] = df['volume'].astype(float)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        return df.set_index('timestamp')
-    except Exception as e:
-        print(f"❌ {symbol} OHLCV 로딩 실패: {e}")
-        return None
-
-def fetch_multi_ohlcv(symbol):
-    df_15m = fetch_ohlcv(symbol, interval='15m')
-    df_5m = fetch_ohlcv(symbol, interval='5m')
-    df_30m = fetch_ohlcv(symbol, interval='30m')
-    return df_15m, df_5m, df_30m
-
-# SL 헌팅 탐지 후 텔레그램 알림
-
-def run_sl_hunt_monitor(symbols):
-    print("🚨 SL 헌팅 모니터링 시작")
-    for symbol in symbols:
-        df_15m, df_5m, df_30m = fetch_multi_ohlcv(symbol)
+        df_15m = fetch_ohlcv(symbol, interval='15m')
+        df_5m = fetch_ohlcv(symbol, interval='5m')
+        df_30m = fetch_ohlcv(symbol, interval='30m')
         if df_15m is None or df_5m is None or df_30m is None:
-            continue
+            return None
 
         signals = detect_sl_hunt(df_15m)
         if not signals:
-            continue
-
-        def confirm_on_lower(df):
-            last = df.iloc[-1]
-            wick = abs(last['high'] - last['low'])
-            body = abs(last['close'] - last['open'])
-            return body / wick < 0.25
-
-        def trend_context(df):
-            return get_trend(df)
-
+            return None
         if not confirm_on_lower(df_5m):
-            continue
+            return None
 
         t, direction, hunt_price = signals[-1]
         price = get_current_price(symbol)
-        trend = trend_context(df_30m)
+        trend = get_trend(df_30m)
 
         if direction == 'SHORT':
             msg = f"""
-🚨 {symbol} - SL 헌팅 감지 (숏 진입 가능성)
-
-📍 최근 {format_price(hunt_price)} 부근에서 매수세 과열 후 급락이 포착되었습니다.
-📈 현재 추세는 {trend}이지만, 단기적으로는 매도 압력이 커질 수 있는 지점입니다.
-
-⚠️ 지금 롱 진입은 낚일 가능성이 있습니다.
-
-💰 현재가: {format_price(price)}
-🔻 주요 반락 지점: {format_price(hunt_price)}
-"""
+⚠️ 참고: 이 타이밍에서 SL 헌팅 반전 패턴이 감지되었습니다.
+📍 최근 고점 돌파 후 급락 발생 → 단기 숏 시그널 주의 필요
+🔻 헌팅 지점: {format_price(hunt_price)}
+            """
         else:
             msg = f"""
-🚨 {symbol} - SL 헌팅 감지 (롱 진입 가능성)
+⚠️ 참고: 이 타이밍에서 SL 헌팅 반전 패턴이 감지되었습니다.
+📍 최근 투매 후 반등 발생 → 단기 롱 시그널 주의 필요
+🔹 헌팅 지점: {format_price(hunt_price)}
+            """
 
-📍 최근 {format_price(hunt_price)} 부근에서 투매 발생 후 반등 시도가 포착되었습니다.
-📉 현재 추세는 {trend}이지만, 단기적으로는 매수세가 살아날 수 있는 지점입니다.
+        return msg.strip()
+    except Exception as e:
+        print(f"❌ SL 헌팅 체크 오류 ({symbol}): {e}")
+        return None
 
-⚠️ 지금 숏 진입은 낚일 가능성이 있습니다.
-
-💰 현재가: {format_price(price)}
-🔹 주요 반등 지점: {format_price(hunt_price)}
-"""
-
-        send_telegram(msg.strip())
+# 기존 SL 루프는 비활성화함 (통합됨)
+# def run_sl_hunt_monitor(symbols):
+#     ... 제거됨 ...
