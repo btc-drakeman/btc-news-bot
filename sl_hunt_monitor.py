@@ -4,7 +4,7 @@ import pandas as pd
 import requests
 from notifier import send_telegram
 from price_fetcher import get_current_price
-from strategy import get_trend
+from strategy import get_trend, format_price
 
 BASE_URL = 'https://api.mexc.com'
 
@@ -106,8 +106,8 @@ def run_sl_hunt_monitor(symbols):
 이 부근에서의 무리한 롱 진입은 손실 가능성이 큽니다.
 
 📉 상위 추세: {trend}
-💰 현재가: {price:.4f}
-🔻 경계 가격대: {hunt_price:.4f}
+💰 현재가: {format_price(price)}
+🔻 경계 가격대: {format_price(hunt_price)}
 """
         else:
             msg = f"""
@@ -120,8 +120,8 @@ def run_sl_hunt_monitor(symbols):
 이 구간에서 숏을 따라갈 경우 낚일 수 있으니 주의하세요.
 
 📈 상위 추세: {trend}
-💰 현재가: {price:.4f}
-🔺 경계 가격대: {hunt_price:.4f}
+💰 현재가: {format_price(price)}
+🔺 경계 가격대: {format_price(hunt_price)}
 """
 
         send_telegram(msg.strip())
