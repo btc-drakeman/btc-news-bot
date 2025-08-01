@@ -4,7 +4,6 @@ from config import SYMBOLS
 from analyzer import analyze_multi_tf
 from price_fetcher import get_all_prices
 from simulator import check_positions
-from sl_hunt_monitor import run_sl_hunt_monitor
 import time
 import traceback
 import datetime
@@ -63,20 +62,10 @@ def monitor_price_loop():
             print(f"⚠️ 가격 감시 오류: {e}")
         time.sleep(30)
 
-def sl_hunt_loop():
-    print("👀 SL 헌팅 감시 루프 시작")
-    while True:
-        try:
-            run_sl_hunt_monitor(SYMBOLS)
-        except Exception as e:
-            print(f"⚠️ SL 헌팅 감시 오류: {e}")
-        time.sleep(300)  # 5분 간격 실행
-
 if __name__ == '__main__':
     t1 = Thread(target=strategy_loop, daemon=True)
     t2 = Thread(target=monitor_price_loop, daemon=True)
     t3 = Thread(target=sl_hunt_loop, daemon=True)
     t1.start()
     t2.start()
-    t3.start()
     app.run(host='0.0.0.0', port=8080)

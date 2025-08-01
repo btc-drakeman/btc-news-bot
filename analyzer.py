@@ -4,7 +4,6 @@ from strategy import get_trend, entry_signal_ema_only, multi_frame_signal
 from config import SYMBOLS
 from notifier import send_telegram
 from simulator import add_virtual_trade
-from sl_hunt_monitor import check_sl_hunt_alert  # ✅ SL 헌팅 통합
 import datetime
 
 BASE_URL = 'https://api.mexc.com'
