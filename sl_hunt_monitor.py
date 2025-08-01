@@ -8,6 +8,7 @@ from strategy import get_trend
 
 BASE_URL = 'https://api.mexc.com'
 
+# 가격 포맷 함수
 def format_price(price: float) -> str:
     if price >= 1000:
         return f"{price:.2f}"
@@ -26,9 +27,8 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.9f}"
 
-
 # SL 헌팅 감지 함수 (단일 봉 분석)
-def detect_sl_hunt(df, threshold=0.2, lookback=20):
+def detect_sl_hunt(df, threshold=0.35, lookback=20):
     signals = []
     for i in range(lookback, len(df)):
         recent = df.iloc[i - lookback:i]
@@ -40,7 +40,7 @@ def detect_sl_hunt(df, threshold=0.2, lookback=20):
 
         broke_high = curr['high'] > high_max
         broke_low = curr['low'] < low_min
-        high_volume = curr['volume'] > prev_volume_avg * 1.5
+        high_volume = curr['volume'] > prev_volume_avg * 2.0
 
         upper_wick = curr['high'] - max(curr['close'], curr['open'])
         lower_wick = min(curr['close'], curr['open']) - curr['low']
@@ -97,15 +97,14 @@ def run_sl_hunt_monitor(symbols):
         if not signals:
             continue
 
-        # 보조 타임프레임 확인 조건 추가
         def confirm_on_lower(df):
             last = df.iloc[-1]
             wick = abs(last['high'] - last['low'])
             body = abs(last['close'] - last['open'])
-            return body / wick < 0.4  # 꼬리가 더 긴 도지형 캔들
+            return body / wick < 0.25
 
         def trend_context(df):
-            return get_trend(df)  # UP / DOWN
+            return get_trend(df)
 
         if not confirm_on_lower(df_5m):
             continue
@@ -116,31 +115,27 @@ def run_sl_hunt_monitor(symbols):
 
         if direction == 'SHORT':
             msg = f"""
-🚨 SL 헌팅 감지: {symbol} (SHORT 후보)
+🚨 {symbol} - SL 헌팅 감지 (숏 진입 가능성)
 
-세력이 {hunt_price:.4f} 부근에 몰린 손절매를 유도한 뒤
-강한 매도 반전을 시도 중입니다.
+📍 최근 {format_price(hunt_price)} 부근에서 매수세 과열 후 급락이 포착되었습니다.
+📈 현재 추세는 {trend}이지만, 단기적으로는 매도 압력이 커질 수 있는 지점입니다.
 
-⚠ 이 구간은 SL이 집중된 '위험 지대'입니다. 
-이 부근에서의 무리한 롱 진입은 손실 가능성이 큽니다.
+⚠️ 지금 롱 진입은 낚일 가능성이 있습니다.
 
-📉 상위 추세: {trend}
 💰 현재가: {format_price(price)}
-🔻 경계 가격대: {format_price(hunt_price)}
+🔻 주요 반락 지점: {format_price(hunt_price)}
 """
         else:
             msg = f"""
-🚨 SL 헌팅 감지: {symbol} (LONG 후보)
+🚨 {symbol} - SL 헌팅 감지 (롱 진입 가능성)
 
-세력이 {hunt_price:.4f} 부근에 몰린 손절매를 유도한 뒤
-반등 흐름을 시도 중입니다.
+📍 최근 {format_price(hunt_price)} 부근에서 투매 발생 후 반등 시도가 포착되었습니다.
+📉 현재 추세는 {trend}이지만, 단기적으로는 매수세가 살아날 수 있는 지점입니다.
 
-⚠ 이 가격대는 SL이 대량으로 몰린 '저점 지대'입니다.
-이 구간에서 숏을 따라갈 경우 낚일 수 있으니 주의하세요.
+⚠️ 지금 숏 진입은 낚일 가능성이 있습니다.
 
-📈 상위 추세: {trend}
 💰 현재가: {format_price(price)}
-🔺 경계 가격대: {format_price(hunt_price)}
+🔹 주요 반등 지점: {format_price(hunt_price)}
 """
 
         send_telegram(msg.strip())
