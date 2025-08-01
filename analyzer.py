@@ -3,7 +3,7 @@ import pandas as pd
 from strategy import get_trend, entry_signal_ema_only, multi_frame_signal
 from config import SYMBOLS
 from notifier import send_telegram
-from simulator import add_virtual_trade    # ← 이 줄 추가
+from simulator import add_virtual_trade
 import datetime
 
 BASE_URL = 'https://api.mexc.com'
@@ -59,14 +59,12 @@ def calc_atr(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean().iloc[-1]
 
-# 추가: entry_type에서 score 추출
 def extract_score(entry_type: str) -> int:
     try:
         return int(entry_type.split('score=')[1].split('/')[0])
     except:
         return 0
 
-# 추가: score → 시각적 별점 + 설명
 def map_score_to_stars(score: int) -> str:
     if score == 5:
         return "★★★★★ (5점 - 강력 추천)"
@@ -78,6 +76,19 @@ def map_score_to_stars(score: int) -> str:
         return "★★☆☆☆ (2점 - 약한 진입 신호)"
     else:
         return "(조건 미달)"
+
+# ✅ 전략 점수 기반 SL/TP 배율 설정
+def get_sl_tp_multipliers(score: int):
+    if score >= 5:
+        return 1.0, 3.0
+    elif score == 4:
+        return 1.1, 2.8
+    elif score == 3:
+        return 1.2, 2.5
+    elif score == 2:
+        return 1.3, 2.0
+    else:
+        return 1.5, 1.2
 
 def analyze_multi_tf(symbol):
     df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
@@ -94,26 +105,25 @@ def analyze_multi_tf(symbol):
     atr = calc_atr(df_5m)
     lev = 20
 
-    if direction == 'LONG':
-        stop_loss = price - atr * 1.2
-        take_profit = price + atr * 2.5
-        symbol_prefix = "📈"
-    else:
-        stop_loss = price + atr * 1.2
-        take_profit = price - atr * 2.5
-        symbol_prefix = "📉"
-
     score = extract_score(entry_type)
     stars = map_score_to_stars(score)
+    sl_mult, tp_mult = get_sl_tp_multipliers(score)
 
-    # 📐 수익/손실 비율 계산
+    if direction == 'LONG':
+        stop_loss = price - atr * sl_mult
+        take_profit = price + atr * tp_mult
+        symbol_prefix = "📈"
+    else:
+        stop_loss = price + atr * sl_mult
+        take_profit = price - atr * tp_mult
+        symbol_prefix = "📉"
+
+    # 수익/손실 비율 계산
     reward = abs(take_profit - price)
     risk = abs(price - stop_loss)
     rr_ratio = reward / risk if risk != 0 else 0
     rr_label = f"⚠ 수익/손실 비율: {rr_ratio:.2f}" if rr_ratio < 1.2 else f"📐 수익/손실 비율: {rr_ratio:.2f}"
 
-    # ─────────────────────────────────────────────────────────
-    # ↓ 여기부터 추가된 부분 (기존 로직 건드리지 마세요)
     entry = {
         "symbol": symbol,
         "direction": direction,
@@ -123,8 +133,6 @@ def analyze_multi_tf(symbol):
         "score": score
     }
     add_virtual_trade(entry)
-    # ↑ 여기까지
-    # ─────────────────────────────────────────────────────────
 
     msg = f"""{symbol_prefix} [{symbol}]
 🎯 진입 방향: {direction} (레버리지 {lev}배)
