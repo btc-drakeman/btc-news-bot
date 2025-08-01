@@ -4,9 +4,28 @@ import pandas as pd
 import requests
 from notifier import send_telegram
 from price_fetcher import get_current_price
-from strategy import get_trend, format_price
+from strategy import get_trend
 
 BASE_URL = 'https://api.mexc.com'
+
+def format_price(price: float) -> str:
+    if price >= 1000:
+        return f"{price:.2f}"
+    elif price >= 1:
+        return f"{price:.3f}"
+    elif price >= 0.1:
+        return f"{price:.4f}"
+    elif price >= 0.01:
+        return f"{price:.5f}"
+    elif price >= 0.001:
+        return f"{price:.6f}"
+    elif price >= 0.0001:
+        return f"{price:.7f}"
+    elif price >= 0.00001:
+        return f"{price:.8f}"
+    else:
+        return f"{price:.9f}"
+
 
 # SL 헌팅 감지 함수 (단일 봉 분석)
 def detect_sl_hunt(df, threshold=0.2, lookback=20):
