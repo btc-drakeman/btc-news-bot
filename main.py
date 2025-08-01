@@ -65,7 +65,6 @@ def monitor_price_loop():
 if __name__ == '__main__':
     t1 = Thread(target=strategy_loop, daemon=True)
     t2 = Thread(target=monitor_price_loop, daemon=True)
-    t3 = Thread(target=sl_hunt_loop, daemon=True)
     t1.start()
     t2.start()
     app.run(host='0.0.0.0', port=8080)
