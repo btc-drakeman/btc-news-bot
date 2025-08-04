@@ -93,7 +93,7 @@ def spring_strategy_loop():
     while True:
         now = datetime.datetime.now()
         key = now.strftime('%Y%m%d%H%M')
-        if now.minute % 30 == 0 and now.second < 10:
+        if now.minute % 15 == 0 and now.second < 10:
             if key not in already_sent:
                 for symbol in SYMBOLS:
                     try:

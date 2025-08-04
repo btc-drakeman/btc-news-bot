@@ -27,7 +27,7 @@ def is_near_bottom(df: pd.DataFrame, threshold=1.025) -> bool:
     return df['close'].iloc[-1] <= prev_low * threshold
 
 def analyze_spring_signal(symbol: str) -> str | None:
-    df = fetch_ohlcv(symbol, interval='1h', limit=100)
+    df = fetch_ohlcv(symbol, interval='15m', limit=200)
     if df is None or len(df) < 30:
         return None
 
@@ -39,8 +39,8 @@ def analyze_spring_signal(symbol: str) -> str | None:
     ):
         price = df['close'].iloc[-1]
         atr = calc_atr(df, period=14)
-        sl = price - atr * 1.2
-        tp = price + atr * 2.0
+        sl = price - atr * 1.0
+        tp = price + atr * 1.6
 
         entry = {"symbol": symbol, "direction": "LONG", "entry": price, "tp": tp, "sl": sl, "score": 0}
         add_virtual_trade(entry)
@@ -63,8 +63,8 @@ def analyze_spring_signal(symbol: str) -> str | None:
     ):
         price = df['close'].iloc[-1]
         atr = calc_atr(df, period=14)
-        sl = price + atr * 1.2
-        tp = price - atr * 2.0
+        sl = price + atr * 1.0
+        tp = price - atr * 1.6
 
         entry = {"symbol": symbol, "direction": "SHORT", "entry": price, "tp": tp, "sl": sl, "score": 0}
         add_virtual_trade(entry)
