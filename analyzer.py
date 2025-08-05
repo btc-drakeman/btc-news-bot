@@ -95,7 +95,7 @@ def get_sl_tp_multipliers(score: int):
         return 1.5, 1.2
 
 # 1분봉 위험 필터
- def is_dangerous_last_1m(df_1m):
+def is_dangerous_last_1m(df_1m):
     last = df_1m.iloc[-1]
     body = abs(last['close'] - last['open'])
     high_wick = last['high'] - max(last['close'], last['open'])
