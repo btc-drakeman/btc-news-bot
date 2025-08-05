@@ -8,7 +8,6 @@ from sl_hunt_monitor import check_sl_hunt_alert  # SL 헌팅 통합
 
 BASE_URL = 'https://api.mexc.com'
 
-
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 100):
     endpoint = '/api/v3/klines'
     params = {'symbol': symbol, 'interval': interval, 'limit': limit}
@@ -94,7 +93,6 @@ def get_sl_tp_multipliers(score: int):
         return 1.3, 2.0
     else:
         return 1.5, 1.2
-
 
 # 1분봉 위험 필터
  def is_dangerous_last_1m(df_1m):
