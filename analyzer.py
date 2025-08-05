@@ -90,6 +90,26 @@ def get_sl_tp_multipliers(score: int):
     else:
         return 1.5, 1.2
 
+# ✅ 진입 직전 1분봉 위험 구조 필터
+def is_dangerous_last_1m(df_1m):
+    last = df_1m.iloc[-1]
+    body = abs(last['close'] - last['open'])
+    high_wick = last['high'] - max(last['close'], last['open'])
+    low_wick = min(last['close'], last['open']) - last['low']
+    total_range = last['high'] - last['low']
+
+    atr = (df_1m['high'] - df_1m['low']).rolling(14).mean().iloc[-1]
+    vol = df_1m['volume'].iloc[-1]
+    vol_avg = df_1m['volume'].rolling(20).mean().iloc[-1]
+
+    if total_range > atr * 2:
+        return True  # 장대봉
+    if high_wick > body * 1.5 and body > atr * 1.2:
+        return True  # 위꼬리 유인봉
+    if vol > vol_avg * 3:
+        return True  # 볼륨 급등
+    return False
+
 def analyze_multi_tf(symbol):
     df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
     df_15m = fetch_ohlcv(symbol, interval='15m', limit=100)
@@ -108,6 +128,13 @@ def analyze_multi_tf(symbol):
     score = extract_score(entry_type)
     stars = map_score_to_stars(score)
     sl_mult, tp_mult = get_sl_tp_multipliers(score)
+
+    # ✅ 고점/위험 구조 진입 차단 (3점 이상일 때만 적용)
+    if score >= 3:
+        df_1m = fetch_ohlcv(symbol, interval='1m', limit=30)
+        if df_1m is not None and is_dangerous_last_1m(df_1m):
+            print(f"⛔ {symbol} 1분봉 위험 패턴 감지 → 3점 진입 보류")
+            return None
 
     if direction == 'LONG':
         stop_loss = price - atr * sl_mult
