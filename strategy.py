@@ -4,10 +4,7 @@ import pandas as pd
 def get_trend(df: pd.DataFrame, ema_period=20) -> str:
     df = df.copy()
     df["ema"] = df["close"].ewm(span=ema_period, adjust=False).mean()
-    if df["close"].iloc[-1] > df["ema"].iloc[-1]:
-        return 'UP'
-    else:
-        return 'DOWN'
+    return 'UP' if df["close"].iloc[-1] > df["ema"].iloc[-1] else 'DOWN'
 
 # EMA 돌파 조건
 def entry_signal_ema_only(df, direction, ema_period=20):
@@ -81,34 +78,38 @@ def is_recent_market_weak(df):
 
 # 최종 시그널
 def multi_frame_signal(df_30m, df_15m, df_5m):
+    # 중기 추세 판단 (15m EMA 기준)
     trend_15m = get_trend(df_15m)
     direction = 'LONG' if trend_15m == 'UP' else 'SHORT'
 
-    # EMA 조건
+    # EMA 돌파 조건
     cond_15m = entry_signal_ema_only(df_15m, direction)
-    cond_5m  = entry_signal_ema_only(df_5m, direction)
+    cond_5m = entry_signal_ema_only(df_5m, direction)
 
-    # 추가 보조지표들
+    # RSI 계산
     df_5m = df_5m.copy()
     df_5m["rsi"] = calc_rsi(df_5m)
     rsi = df_5m["rsi"].iloc[-1]
 
-    # ✅ 숏인데 RSI가 너무 낮으면 진입 배제
-    if direction == "SHORT" and rsi < 45:
+    # 과매수/과매도 필터 추가
+    if direction == "SHORT" and rsi >= 55:
+        return None, None
+    if direction == "LONG" and rsi <= 45:
         return None, None
 
-    # ✅ 진입 직전 3분간 시장 약세 필터
+    # 진입 직전 시장 약세 필터
     if is_recent_market_weak(df_5m):
         return None, None
 
-    # ✅ 혼조 + RSI < 25 → 위험한 롱 진입 차단
+    # 혼조 + RSI < 25 필터
     if cond_15m != cond_5m and rsi < 25:
         return None, None
 
+    # 보조 지표
     bollinger_check = is_bollinger_breakout(df_5m)
     volume_check = is_volume_spike(df_5m)
 
-    # 점수 계산: 정밀 점수(raw_score) 및 최종 점수(final_score)
+    # 점수 계산: raw_score
     raw_score = 0.0
     if cond_15m:
         raw_score += 1
@@ -120,19 +121,18 @@ def multi_frame_signal(df_30m, df_15m, df_5m):
     if volume_check:
         raw_score += 1
 
-    # ✅ EMA 조건 감점
+    # EMA 감점 강화
     if not cond_15m and not cond_5m:
-        raw_score -= 1     # 확실히 아닌 조건은 강하게 감점
+        raw_score -= 1.5  # EMA 둘 다 불일치 시 대폭 감점
     elif cond_15m != cond_5m:
-        raw_score -= 0.3   # 혼조 상태는 완화된 감점
+        raw_score -= 1.0  # EMA 혼조 시 감점 강화
 
-    # 최종 판단용 점수 기준 (반올림 제거)
-    if raw_score >= 2.0:
+    # 최종 판단용 점수 기준 상향
+    if raw_score >= 3.0:
         entry_type = (
             f"score={round(raw_score)}/"
             f"EMA:{cond_15m}+{cond_5m}/"
             f"RSI:{int(rsi)}/VOL:{volume_check}"
         )
         return direction, entry_type
-    else:
-        return None, None
+    return None, None
