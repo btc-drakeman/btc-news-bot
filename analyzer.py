@@ -30,6 +30,8 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 100):
         print(f"❌ {symbol} 데이터 불러오기 실패: {e}")
         return None
 
+def fetch_ohlcv_1h(symbol: str, limit: int = 100):
+    return fetch_ohlcv(symbol, interval='1h', limit=limit)
 
 def format_price(price: float) -> str:
     if price >= 1000:
@@ -49,7 +51,6 @@ def format_price(price: float) -> str:
     else:
         return f"{price:.9f}"
 
-
 def calc_atr(df, period=14):
     high = df['high']
     low = df['low']
@@ -61,13 +62,11 @@ def calc_atr(df, period=14):
     ], axis=1).max(axis=1)
     return tr.rolling(period).mean().iloc[-1]
 
-
 def extract_score(entry_type: str) -> int:
     try:
         return int(entry_type.split('score=')[1].split('/')[0])
     except:
         return 0
-
 
 def map_score_to_stars(score: int) -> str:
     if score == 5:
@@ -80,7 +79,6 @@ def map_score_to_stars(score: int) -> str:
         return "★★☆☆☆ (2점 - 약한 진입 신호)"
     else:
         return "(조건 미달)"
-
 
 def get_sl_tp_multipliers(score: int):
     if score >= 5:
@@ -114,12 +112,14 @@ def is_dangerous_last_1m(df_1m):
         return True
     return False
 
-
 def analyze_multi_tf(symbol):
     # OHLCV 가져오기
     df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
     df_15m = fetch_ohlcv(symbol, interval='15m', limit=100)
     df_5m = fetch_ohlcv(symbol, interval='5m', limit=100)
+    df_1m = fetch_ohlcv(symbol, interval='1m', limit=30)
+    df_1h = fetch_ohlcv_1h(symbol, limit=100)
+
     if df_30m is None or df_15m is None or df_5m is None:
         return None
 
@@ -133,7 +133,6 @@ def analyze_multi_tf(symbol):
     lev = 20
 
     score = extract_score(entry_type)
-    # 약한 신호 차단
     if score < 3:
         print(f"⛔ {symbol} 약한 신호 (score={score}) → 알림 생략")
         return None
@@ -142,7 +141,6 @@ def analyze_multi_tf(symbol):
     sl_mult, tp_mult = get_sl_tp_multipliers(score)
 
     # 위험 구조 필터
-    df_1m = fetch_ohlcv(symbol, interval='1m', limit=30)
     if df_1m is not None and is_dangerous_last_1m(df_1m):
         print(f"⛔ {symbol} 1분봉 위험 패턴 감지 → 진입 보류")
         return None
