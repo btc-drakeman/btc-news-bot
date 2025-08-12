@@ -6,32 +6,44 @@ from notifier import send_telegram
 from simulator import add_virtual_trade
 from sl_hunt_monitor import check_sl_hunt_alert  # SL 헌팅 통합
 
-BASE_URL = 'https://api.mexc.com'
+# analyzer.py
+import requests
+import pandas as pd
+
+FUTURES_BASE = "https://contract.mexc.com"
+
+def _map_interval(iv: str) -> str:
+    m = {"1m":"Min1", "5m":"Min5", "15m":"Min15", "30m":"Min30", "1h":"Min60"}
+    return m.get(iv, "Min15")
 
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 100):
-    endpoint = '/api/v3/klines'
-    params = {'symbol': symbol, 'interval': interval, 'limit': limit}
+    # 선물 심볼 표기로 변환: BTCUSDT -> BTC_USDT
+    f_symbol = symbol.replace("USDT", "_USDT")
+    url = f"{FUTURES_BASE}/api/v1/contract/kline/{f_symbol}"
+    params = {"interval": _map_interval(interval)}
     try:
-        res = requests.get(BASE_URL + endpoint, params=params, timeout=10)
-        res.raise_for_status()
-        raw = res.json()
-        df = pd.DataFrame(raw, columns=[
-            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_volume'
-        ])
-        df['close'] = df['close'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['volume'] = df['volume'].astype(float)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df.set_index('timestamp', inplace=True)
-        return df
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        data = r.json()["data"]  # 공식 문서: 배열 형태의 시계열 필드들
+        # 응답은 time/open/close/high/low/vol/amount 의 배열 딕셔너리
+        df = pd.DataFrame({
+            "timestamp": pd.to_datetime(data["time"], unit="s"),
+            "open": data["open"],
+            "high": data["high"],
+            "low": data["low"],
+            "close": data["close"],
+            "volume": data["vol"],
+        })
+        df.set_index("timestamp", inplace=True)
+        # 최신 기준으로 limit개만 취함
+        return df.tail(limit).astype(float)
     except Exception as e:
-        print(f"❌ {symbol} 데이터 불러오기 실패: {e}")
+        print(f"❌ {symbol} 선물 데이터 불러오기 실패: {e}")
         return None
 
 def fetch_ohlcv_1h(symbol: str, limit: int = 100):
-    return fetch_ohlcv(symbol, interval='1h', limit=limit)
+    return fetch_ohlcv(symbol, interval="1h", limit=limit)
+
 
 def format_price(price: float) -> str:
     if price >= 1000:

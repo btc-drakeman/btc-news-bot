@@ -4,6 +4,7 @@ import pandas as pd
 import requests
 from price_fetcher import get_current_price
 from strategy import get_trend
+from analyzer import fetch_ohlcv
 
 BASE_URL = 'https://api.mexc.com'
 
