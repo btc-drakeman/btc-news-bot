@@ -4,7 +4,6 @@ import pandas as pd
 import requests
 from price_fetcher import get_current_price
 from strategy import get_trend
-from analyzer import fetch_ohlcv
 
 BASE_URL = 'https://api.mexc.com'
 
@@ -65,6 +64,7 @@ def confirm_on_lower(df):
 # SL 헌팅 통합 검사 함수 (진입 전략 후 호출용)
 def check_sl_hunt_alert(symbol):
     try:
+        from analyzer import fetch_ohlcv
         df_15m = fetch_ohlcv(symbol, interval='15m')
         df_5m = fetch_ohlcv(symbol, interval='5m')
         df_30m = fetch_ohlcv(symbol, interval='30m')
