@@ -28,12 +28,15 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
     return df
 
 def analyze_multi_tf(symbol: str):
+    print(f"🔍 멀티프레임 전략 분석 시작: {symbol}")
     df_30 = fetch_ohlcv(symbol, "30m", 150)
     df_15 = fetch_ohlcv(symbol, "15m", 150)
     df_5  = fetch_ohlcv(symbol, "5m",  150)
 
     signal = multi_frame_signal(df_30, df_15, df_5)
     if signal == (None, None):
+        print(f"📭 {symbol} 전략 신호 없음")
+        print(f"✅ {symbol} 전략 분석 완료")
         return None
 
     direction, detail = signal
@@ -66,4 +69,5 @@ def analyze_multi_tf(symbol: str):
     )
 
     send_telegram(msg)
+    print(f"✅ {symbol} 전략 분석 완료")
     return msg
