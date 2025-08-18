@@ -1,9 +1,9 @@
-import json
-import os
-import csv
+import json, os, csv, time
 from datetime import datetime
+from typing import Dict, Any
+from config import SYMBOLS, SPIKE_POLL_INTERVAL_SECONDS
+from price_fetcher import get_all_prices
 
-# 저장 경로 설정
 LOG_DIR = "simulation_logs"
 POSITIONS_FILE = os.path.join(LOG_DIR, "positions.json")
 RESULTS_FILE = os.path.join(LOG_DIR, "results.json")
@@ -11,206 +11,108 @@ BALANCE_FILE = os.path.join(LOG_DIR, "balance.txt")
 CSV_EXPORT_FILE = os.path.join(LOG_DIR, "results_export.csv")
 CSV_BY_COIN_DIR = os.path.join(LOG_DIR, "export_by_coin")
 
-# 초기 잔고 설정
-INITIAL_BALANCE = 100.0
+INITIAL_BALANCE = 100.0  # 단위: 가상 포인트
 
-# 디렉터리 생성
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(CSV_BY_COIN_DIR, exist_ok=True)
 
-# 가상 지갑 초기화
-if not os.path.exists(BALANCE_FILE):
-    with open(BALANCE_FILE, 'w') as f:
-        f.write(str(INITIAL_BALANCE))
-
-# 기존 포지션 불러오기
-def load_positions():
-    if os.path.exists(POSITIONS_FILE):
-        with open(POSITIONS_FILE, 'r') as f:
+def _load_json(path: str, default):
+    if not os.path.exists(path): return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    return []
+    except Exception:
+        return default
 
-# 포지션 저장
-def save_positions(positions):
-    with open(POSITIONS_FILE, 'w') as f:
-        json.dump(positions, f, indent=2)
+def _save_json(path: str, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-# 결과 저장
-def save_result(entry, result):
-    data = []
-    if os.path.exists(RESULTS_FILE):
-        with open(RESULTS_FILE, 'r') as f:
-            data = json.load(f)
-    data.append({**entry, **result})
-    with open(RESULTS_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-    export_results_to_csv(data)
-    export_results_by_coin(data)
+def _load_balance() -> float:
+    if not os.path.exists(BALANCE_FILE):
+        with open(BALANCE_FILE, "w") as f: f.write(str(INITIAL_BALANCE))
+        return INITIAL_BALANCE
+    try:
+        return float(open(BALANCE_FILE).read().strip())
+    except Exception:
+        return INITIAL_BALANCE
 
-# 잔고 업데이트
-def update_balance(pnl):
-    with open(BALANCE_FILE, 'r') as f:
-        balance = float(f.read())
-    balance += pnl
-    with open(BALANCE_FILE, 'w') as f:
-        f.write(str(balance))
+def _save_balance(v: float):
+    with open(BALANCE_FILE, "w") as f: f.write(f"{v:.4f}")
 
-# 현재 열린 포지션 조회
-def get_open_position(symbol):
-    positions = load_positions()
-    for p in positions:
-        if p.get('symbol') == symbol and p.get('status') == 'OPEN':
-            return p
-    return None
-
-from price_fetcher import get_current_price  # 시장가 청산용
-
-# 진입 포지션 기록 및 반대 시그널 처리
-# (방향이 다르고 점수가 같거나 높거나 OR 같은 방향인데 점수 더 높을 때 교체)
-def add_virtual_trade(entry):
-    current = get_open_position(entry['symbol'])
-    new_score = entry.get('score', 0)
-
-    if current:
-        current_score = current.get('score', 0)
-        should_replace = False
-
-        if entry['direction'] != current['direction'] and new_score >= current_score:
-            should_replace = True
-        elif entry['direction'] == current['direction'] and new_score > current_score:
-            should_replace = True
-
-        if should_replace:
-            # 반대 포지션 진입 또는 점수 높은 시그널로 기존 포지션 시장가 청산
-            close_price = get_current_price(current['symbol']) or current['entry']
-            if current['direction'] == 'LONG':
-                pnl = (close_price - current['entry']) * 20
-            else:
-                pnl = (current['entry'] - close_price) * 20
-            current['status'] = 'CLOSED_BY_SIGNAL'
-            current['close_time'] = datetime.now().isoformat()
-            current['pnl'] = round(pnl, 4)
-
-            # real_pnl 및 current_balance 계산
-            position_size = INITIAL_BALANCE * 20
-            qty = position_size / current['entry']
-            if current['direction'] == 'SHORT':
-                real_pnl = (current['entry'] - close_price) * qty
-            else:
-                real_pnl = (close_price - current['entry']) * qty
-            real_pnl = round(real_pnl, 4)
-            current['real_pnl'] = real_pnl
-
-            with open(BALANCE_FILE, 'r') as f:
-                balance = float(f.read())
-            updated_balance = balance + real_pnl
-            current['current_balance'] = round(updated_balance, 4)
-
-            save_result(current, current)
-            update_balance(real_pnl)
-            print(f"🔁 [전환 종료] {current['symbol']} 중간 청산 → PnL: {real_pnl:.4f}, Balance: {updated_balance:.4f}")
-        else:
-            print(f"⛔ {entry['symbol']} 기존 포지션 조건이 더 우세 → 진입 무시")
-            return
-
-    # 새로운 포지션 진입 기록
-    positions = load_positions()
-    entry['open_time'] = datetime.now().isoformat()
-    entry['status'] = 'OPEN'
+def add_virtual_trade(entry: Dict[str, Any]):
+    positions = _load_json(POSITIONS_FILE, [])
+    entry["status"] = "OPEN"
+    entry["open_time"] = datetime.utcnow().isoformat()
     positions.append(entry)
-    save_positions(positions)
-    print(f"💾 [모의 진입 기록] {entry['symbol']} {entry['direction']} @ {entry['entry']}")
+    _save_json(POSITIONS_FILE, positions)
 
-# 실시간 가격 기반 포지션 체크 (외부에서 호출)
-def check_positions(current_prices: dict):
-    positions = load_positions()
-    updated = []
-    for p in positions:
-        if p.get('status') != 'OPEN':
-            updated.append(p)
-            continue
-        symbol = p['symbol']
-        price = current_prices.get(symbol)
-        if price is None:
-            updated.append(p)
-            continue
+def _close_position(p: Dict[str, Any], price: float, reason: str):
+    results = _load_json(RESULTS_FILE, [])
+    balance = _load_balance()
 
-        pnl = 0.0
-        if p['direction'] == 'LONG':
-            if price >= p['tp']:
-                pnl = (p['tp'] - p['entry']) * 20
-                p['status'] = 'TP'
-            elif price <= p['sl']:
-                pnl = (p['sl'] - p['entry']) * 20
-                p['status'] = 'SL'
-        else:
-            if price <= p['tp']:
-                pnl = (p['entry'] - p['tp']) * 20
-                p['status'] = 'TP'
-            elif price >= p['sl']:
-                pnl = (p['entry'] - p['sl']) * 20
-                p['status'] = 'SL'
+    direction = p["direction"]
+    entry = p["entry"]
+    pnl = (price - entry) if direction == "LONG" else (entry - price)
 
-        if p['status'] in ('TP', 'SL'):
-            p['close_time'] = datetime.now().isoformat()
-            p['pnl'] = round(pnl, 4)
+    p["status"] = reason
+    p["close_time"] = datetime.utcnow().isoformat()
+    p["pnl"] = round(pnl, 6)
+    p["current_balance"] = round(balance + pnl, 4)
 
-            # 💰 실질 수익 계산 (기본 자본 100 USDT × 레버리지 20)
-            position_size = INITIAL_BALANCE * 20
-            qty = position_size / p['entry']
-            if p['status'] == 'TP':
-                real_pnl = (p['entry'] - p['tp']) * qty if p['direction'] == 'SHORT' else (p['tp'] - p['entry']) * qty
-            else:
-                real_pnl = (p['sl'] - p['entry']) * qty if p['direction'] == 'SHORT' else (p['entry'] - p['sl']) * qty
-            p['real_pnl'] = round(real_pnl, 4)
+    results.append(p)
+    _save_json(RESULTS_FILE, results)
 
-            # 💵 잔고 반영 및 기록
-            with open(BALANCE_FILE, 'r') as f:
-                balance = float(f.read())
-            updated_balance = balance + real_pnl
-            p['current_balance'] = round(updated_balance, 4)
+    _save_balance(balance + pnl)
 
-            save_result(p, p)
-            update_balance(real_pnl)
-            print(f"✅ [포지션 종료] {symbol} {p['status']} | Real PnL: {real_pnl:.4f}, Balance: {updated_balance:.4f}")
-        updated.append(p)
-
-    save_positions(updated)
-
-# CSV 파일로 결과 전체 내보내기
-def export_results_to_csv(results):
-    if not results:
-        return
-    keys = [
-        'symbol', 'direction', 'entry', 'tp', 'sl', 'score', 'status',
-        'pnl', 'real_pnl', 'current_balance', 'open_time', 'close_time'
-    ]
-    with open(CSV_EXPORT_FILE, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=keys)
-        writer.writeheader()
+def export_results_csv():
+    results = _load_json(RESULTS_FILE, [])
+    if not results: return
+    keys = ['symbol','direction','entry','tp','sl','score','status','pnl','current_balance','open_time','close_time']
+    with open(CSV_EXPORT_FILE, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
         for row in results:
-            writer.writerow({k: row.get(k, '') for k in keys})
-
-# CSV 파일로 코인별 내보내기
-def export_results_by_coin(results):
-    if not results:
-        return
-    coins = {}
-    for row in results:
-        symbol = row.get('symbol')
-        if not symbol:
-            continue
-        coins.setdefault(symbol, []).append(row)
-
-    keys = [
-        'symbol', 'direction', 'entry', 'tp', 'sl', 'score', 'status',
-        'pnl', 'real_pnl', 'current_balance', 'open_time', 'close_time'
-    ]
-
-    for symbol, rows in coins.items():
-        filename = os.path.join(CSV_BY_COIN_DIR, f"{symbol}.csv")
-        with open(filename, 'w', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
+            w.writerow({k: row.get(k, "") for k in keys})
+    by_coin = {}
+    for r in results:
+        by_coin.setdefault(r["symbol"], []).append(r)
+    for sym, rows in by_coin.items():
+        path = os.path.join(CSV_BY_COIN_DIR, f"{sym}.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
             for row in rows:
-                writer.writerow({k: row.get(k, '') for k in keys})
+                w.writerow({k: row.get(k, "") for k in keys})
+
+def check_positions():
+    """퍼센트 기반 TP/SL 판정 루프."""
+    while True:
+        prices = get_all_prices(SYMBOLS)
+        positions = _load_json(POSITIONS_FILE, [])
+        changed = False
+
+        for p in positions:
+            if p.get("status") != "OPEN":
+                continue
+            sym = p["symbol"]
+            if sym not in prices:
+                continue
+            price = prices[sym]
+
+            if p["direction"] == "LONG":
+                if price >= p["tp"]:
+                    _close_position(p, price, "TP"); changed = True
+                elif price <= p["sl"]:
+                    _close_position(p, price, "SL"); changed = True
+            else:
+                if price <= p["tp"]:
+                    _close_position(p, price, "TP"); changed = True
+                elif price >= p["sl"]:
+                    _close_position(p, price, "SL"); changed = True
+
+        if changed:
+            _save_json(POSITIONS_FILE, positions)
+            export_results_csv()
+
+        time.sleep(SPIKE_POLL_INTERVAL_SECONDS)

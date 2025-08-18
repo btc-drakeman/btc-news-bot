@@ -1,138 +1,72 @@
 import pandas as pd
 
-# 기존 EMA 추세 판단
-def get_trend(df: pd.DataFrame, ema_period=20) -> str:
+def get_trend(df: pd.DataFrame, ema_period: int = 20) -> str:
     df = df.copy()
     df["ema"] = df["close"].ewm(span=ema_period, adjust=False).mean()
-    return 'UP' if df["close"].iloc[-1] > df["ema"].iloc[-1] else 'DOWN'
+    return "UP" if df["close"].iloc[-1] > df["ema"].iloc[-1] else "DOWN"
 
-# EMA 돌파 조건
-def entry_signal_ema_only(df, direction, ema_period=20):
+def entry_signal_ema_only(df: pd.DataFrame, direction: str, ema_period: int = 20) -> bool:
     df = df.copy()
     df["ema"] = df["close"].ewm(span=ema_period, adjust=False).mean()
     prev_close = df["close"].iloc[-2]
     curr_close = df["close"].iloc[-1]
-    prev_ema = df["ema"].iloc[-2]
-    curr_ema = df["ema"].iloc[-1]
-    if direction == 'LONG':
-        return prev_close < prev_ema and curr_close > curr_ema
+    prev_ema   = df["ema"].iloc[-2]
+    curr_ema   = df["ema"].iloc[-1]
+
+    if direction == "LONG":
+        return prev_close <= prev_ema and curr_close > curr_ema
     else:
-        return prev_close > prev_ema and curr_close < curr_ema
+        return prev_close >= prev_ema and curr_close < curr_ema
 
-# RSI 계산
-def calc_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=period).mean()
-    avg_loss = loss.rolling(window=period).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+def _rsi(series: pd.Series, period: int = 14) -> float:
+    delta = series.diff()
+    up = delta.clip(lower=0)
+    down = -delta.clip(upper=0)
+    roll_up = up.ewm(alpha=1/period, adjust=False).mean()
+    roll_down = down.ewm(alpha=1/period, adjust=False).mean()
+    rs = roll_up / (roll_down + 1e-12)
+    rsi = 100 - (100 / (1 + rs))
+    return float(rsi.iloc[-1])
 
-# RSI 기반 가중치 점수
-def rsi_score(rsi: float, direction: str) -> float:
-    if direction == "SHORT":
-        if rsi >= 70:
-            return 1.0
-        elif rsi >= 65:
-            return 0.5
-        elif rsi >= 55:
-            return 0.2
-        else:
-            return 0.0
-    elif direction == "LONG":
-        if rsi <= 30:
-            return 1.0
-        elif rsi <= 35:
-            return 0.5
-        elif rsi <= 45:
-            return 0.2
-        else:
-            return 0.0
-    return 0.0
+def multi_frame_signal(df_30m: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame):
+    """
+    개선:
+      - RSI 하드 차단 제거(진입 차단 X, 점수에만 반영)
+      - EMA 혼조/불일치 페널티 완화
+      - 컷 기준 2.5
+    """
+    trend_30 = get_trend(df_30m, 20)
+    direction = "LONG" if trend_30 == "UP" else "SHORT"
 
-# 볼린저밴드 돌파 여부
-def is_bollinger_breakout(df):
-    ma = df['close'].rolling(window=20).mean()
-    std = df['close'].rolling(window=20).std()
-    upper = ma + 2 * std
-    lower = ma - 2 * std
-    last_close = df['close'].iloc[-1]
-    return last_close > upper.iloc[-1] or last_close < lower.iloc[-1]
+    cond_15m = entry_signal_ema_only(df_15m, direction, ema_period=20)
+    cond_5m  = entry_signal_ema_only(df_5m,  direction, ema_period=20)
 
-# 거래량 평균보다 높은지
-def is_volume_spike(df):
-    recent = df['volume'].iloc[-1]
-    avg = df['volume'].rolling(window=20).mean().iloc[-1]
-    return recent > avg * 1.5
+    rsi = _rsi(df_15m["close"], 14)
+    rsi_score = 0.0
+    if direction == "SHORT" and rsi >= 60:
+        rsi_score += 1.0
+    if direction == "LONG" and rsi <= 40:
+        rsi_score += 1.0
 
-# 최근 3분간 거래량 및 변동성 저조 여부 판단
-def is_recent_market_weak(df):
-    if len(df) < 3:
-        return False
-    last_3 = df[-3:]
-    price_range = last_3['high'].max() - last_3['low'].min()
-    avg_volume = df['volume'].rolling(window=20).mean().iloc[-1]
-    recent_volume = last_3['volume'].mean()
-    return price_range < df['close'].iloc[-1] * 0.002 and recent_volume < avg_volume * 0.5
+    vol5 = df_5m["volume"]
+    volume_check = bool(vol5.iloc[-1] > vol5.rolling(10).mean().iloc[-1])
 
-# 최종 시그널
-def multi_frame_signal(df_30m, df_15m, df_5m):
-    # 중기 추세 판단 (15m EMA 기준)
-    trend_15m = get_trend(df_15m)
-    direction = 'LONG' if trend_15m == 'UP' else 'SHORT'
-
-    # EMA 돌파 조건
-    cond_15m = entry_signal_ema_only(df_15m, direction)
-    cond_5m = entry_signal_ema_only(df_5m, direction)
-
-    # RSI 계산
-    df_5m = df_5m.copy()
-    df_5m["rsi"] = calc_rsi(df_5m)
-    rsi = df_5m["rsi"].iloc[-1]
-
-    # 과매수/과매도 필터 추가
-    if direction == "SHORT" and rsi >= 55:
-        return None, None
-    if direction == "LONG" and rsi <= 45:
-        return None, None
-
-    # 진입 직전 시장 약세 필터
-    if is_recent_market_weak(df_5m):
-        return None, None
-
-    # 혼조 + RSI < 25 필터
-    if cond_15m != cond_5m and rsi < 25:
-        return None, None
-
-    # 보조 지표
-    bollinger_check = is_bollinger_breakout(df_5m)
-    volume_check = is_volume_spike(df_5m)
-
-    # 점수 계산: raw_score
     raw_score = 0.0
-    if cond_15m:
-        raw_score += 1
-    if cond_5m:
-        raw_score += 1
-    raw_score += rsi_score(rsi, direction)
-    if bollinger_check:
-        raw_score += 1
-    if volume_check:
-        raw_score += 1
+    if cond_15m: raw_score += 1.0
+    if cond_5m:  raw_score += 1.0
+    if volume_check: raw_score += 0.5
+    raw_score += rsi_score
 
-    # EMA 감점 강화
     if not cond_15m and not cond_5m:
-        raw_score -= 1.5  # EMA 둘 다 불일치 시 대폭 감점
+        raw_score -= 1.0
     elif cond_15m != cond_5m:
-        raw_score -= 1.0  # EMA 혼조 시 감점 강화
+        raw_score -= 0.5
 
-    # 최종 판단용 점수 기준 상향
-    if raw_score >= 3.0:
+    if raw_score >= 2.5:
         entry_type = (
-            f"score={round(raw_score)}/"
-            f"EMA:{cond_15m}+{cond_5m}/"
-            f"RSI:{int(rsi)}/VOL:{volume_check}"
+            f"score={round(raw_score,1)}/"
+            f"EMA:{int(cond_15m)}+{int(cond_5m)}/"
+            f"RSI:{int(rsi)}/VOL:{int(volume_check)}"
         )
         return direction, entry_type
     return None, None

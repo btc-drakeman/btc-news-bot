@@ -1,198 +1,74 @@
 import requests
 import pandas as pd
-from strategy import get_trend, entry_signal_ema_only, multi_frame_signal
-from config import SYMBOLS
+from strategy import multi_frame_signal
+from config import SYMBOLS, SL_PCT, TP_PCT, format_price
 from notifier import send_telegram
 from simulator import add_virtual_trade
-from sl_hunt_monitor import check_sl_hunt_alert  # SL 헌팅 통합
-
-# analyzer.py
-import requests
-import pandas as pd
+from sl_hunt_monitor import check_sl_hunt_alert
 
 FUTURES_BASE = "https://contract.mexc.com"
 
 def _map_interval(iv: str) -> str:
     m = {"1m":"Min1", "5m":"Min5", "15m":"Min15", "30m":"Min30", "1h":"Min60"}
-    return m.get(iv, "Min15")
+    return m.get(iv, "Min5")
 
-def fetch_ohlcv(symbol: str, interval: str, limit: int = 100):
-    # 선물 심볼 표기로 변환: BTCUSDT -> BTC_USDT
-    f_symbol = symbol.replace("USDT", "_USDT")
-    url = f"{FUTURES_BASE}/api/v1/contract/kline/{f_symbol}"
-    params = {"interval": _map_interval(interval)}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()["data"]  # 공식 문서: 배열 형태의 시계열 필드들
-        # 응답은 time/open/close/high/low/vol/amount 의 배열 딕셔너리
-        df = pd.DataFrame({
-            "timestamp": pd.to_datetime(data["time"], unit="s"),
-            "open": data["open"],
-            "high": data["high"],
-            "low": data["low"],
-            "close": data["close"],
-            "volume": data["vol"],
-        })
-        df.set_index("timestamp", inplace=True)
-        # 최신 기준으로 limit개만 취함
-        return df.tail(limit).astype(float)
-    except Exception as e:
-        print(f"❌ {symbol} 선물 데이터 불러오기 실패: {e}")
+def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
+    fsym = symbol.replace("USDT", "_USDT")
+    kline_type = _map_interval(interval)
+    r = requests.get(f"{FUTURES_BASE}/api/v1/contract/kline/{fsym}",
+                     params={"type": kline_type, "limit": limit}, timeout=8)
+    r.raise_for_status()
+    raw = r.json()["data"]
+    df = pd.DataFrame(raw, columns=[
+        "ts","open","high","low","close","volume","turnover"
+    ])
+    for col in ["open","high","low","close","volume"]:
+        df[col] = df[col].astype(float)
+    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+    df = df.set_index("ts")
+    return df
+
+def analyze_multi_tf(symbol: str):
+    df_30 = fetch_ohlcv(symbol, "30m", 150)
+    df_15 = fetch_ohlcv(symbol, "15m", 150)
+    df_5  = fetch_ohlcv(symbol, "5m",  150)
+
+    signal = multi_frame_signal(df_30, df_15, df_5)
+    if signal == (None, None):
         return None
 
-def fetch_ohlcv_1h(symbol: str, limit: int = 100):
-    return fetch_ohlcv(symbol, interval="1h", limit=limit)
+    direction, detail = signal
+    price = df_5["close"].iloc[-1]
 
-
-def format_price(price: float) -> str:
-    if price >= 1000:
-        return f"{price:.2f}"
-    elif price >= 1:
-        return f"{price:.3f}"
-    elif price >= 0.1:
-        return f"{price:.4f}"
-    elif price >= 0.01:
-        return f"{price:.5f}"
-    elif price >= 0.001:
-        return f"{price:.6f}"
-    elif price >= 0.0001:
-        return f"{price:.7f}"
-    elif price >= 0.00001:
-        return f"{price:.8f}"
+    # 퍼센트 기반 TP/SL
+    if direction == "LONG":
+        sl = price * (1 - SL_PCT)
+        tp = price * (1 + TP_PCT)
     else:
-        return f"{price:.9f}"
+        sl = price * (1 + SL_PCT)
+        tp = price * (1 - TP_PCT)
 
-def calc_atr(df, period=14):
-    high = df['high']
-    low = df['low']
-    close = df['close']
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs()
-    ], axis=1).max(axis=1)
-    return tr.rolling(period).mean().iloc[-1]
+    # 시뮬 기록
+    entry = {
+        "symbol": symbol,
+        "direction": direction,
+        "entry": float(price),
+        "tp": float(tp),
+        "sl": float(sl),
+        "score": 0
+    }
+    add_virtual_trade(entry)
 
-def extract_score(entry_type: str) -> int:
-    try:
-        return int(entry_type.split('score=')[1].split('/')[0])
-    except:
-        return 0
+    msg = (
+        f"📊 멀티프레임: {symbol}\n"
+        f"🧭 방향: {direction} ({detail})\n"
+        f"💵 진입: ${format_price(price)}\n"
+        f"🛑 SL: ${format_price(sl)} | 🎯 TP: ${format_price(tp)}"
+    )
 
-def map_score_to_stars(score: int) -> str:
-    if score == 5:
-        return "★★★★★ (5점 - 강력 추천)"
-    elif score == 4:
-        return "★★★★☆ (4점 - 전략 조건 우수)"
-    elif score == 3:
-        return "★★★☆☆ (3점 - 전략 기준 충족)"
-    elif score == 2:
-        return "★★☆☆☆ (2점 - 약한 진입 신호)"
-    else:
-        return "(조건 미달)"
+    sl_alert = check_sl_hunt_alert(symbol)
+    if sl_alert:
+        msg += f"\n\n{sl_alert}"
 
-def get_sl_tp_multipliers(score: int):
-    if score >= 5:
-        return 1.0, 3.0
-    elif score == 4:
-        return 1.1, 2.8
-    elif score == 3:
-        return 1.2, 2.5
-    elif score == 2:
-        return 1.3, 2.0
-    else:
-        return 1.5, 1.2
-
-# 1분봉 위험 필터
-def is_dangerous_last_1m(df_1m):
-    last = df_1m.iloc[-1]
-    body = abs(last['close'] - last['open'])
-    high_wick = last['high'] - max(last['close'], last['open'])
-    low_wick = min(last['close'], last['open']) - last['low']
-    total_range = last['high'] - last['low']
-
-    atr = (df_1m['high'] - df_1m['low']).rolling(14).mean().iloc[-1]
-    vol = df_1m['volume'].iloc[-1]
-    vol_avg = df_1m['volume'].rolling(20).mean().iloc[-1]
-
-    if total_range > atr * 2:
-        return True
-    if high_wick > body * 1.5 and body > atr * 1.2:
-        return True
-    if vol > vol_avg * 3:
-        return True
-    return False
-
-def analyze_multi_tf(symbol):
-    # OHLCV 가져오기
-    df_30m = fetch_ohlcv(symbol, interval='30m', limit=100)
-    df_15m = fetch_ohlcv(symbol, interval='15m', limit=100)
-    df_5m = fetch_ohlcv(symbol, interval='5m', limit=100)
-    df_1m = fetch_ohlcv(symbol, interval='1m', limit=30)
-    df_1h = fetch_ohlcv_1h(symbol, limit=100)
-
-    if df_30m is None or df_15m is None or df_5m is None:
-        return None
-
-    # 멀티 프레임 시그널
-    direction, entry_type = multi_frame_signal(df_30m, df_15m, df_5m)
-    if direction is None:
-        return None
-
-    price = df_5m['close'].iloc[-1]
-    atr = calc_atr(df_5m)
-    lev = 20
-
-    score = extract_score(entry_type)
-    if score < 3:
-        print(f"⛔ {symbol} 약한 신호 (score={score}) → 알림 생략")
-        return None
-
-    stars = map_score_to_stars(score)
-    sl_mult, tp_mult = get_sl_tp_multipliers(score)
-
-    # 위험 구조 필터
-    if df_1m is not None and is_dangerous_last_1m(df_1m):
-        print(f"⛔ {symbol} 1분봉 위험 패턴 감지 → 진입 보류")
-        return None
-
-    # 포지션 산출
-    if direction == 'LONG':
-        stop_loss = price - atr * sl_mult
-        take_profit = price + atr * tp_mult
-        symbol_prefix = "📈"
-    else:
-        stop_loss = price + atr * sl_mult
-        take_profit = price - atr * tp_mult
-        symbol_prefix = "📉"
-
-    # RR 비율 필터
-    reward = abs(take_profit - price)
-    risk = abs(price - stop_loss)
-    rr_ratio = reward / risk if risk != 0 else 0
-    if rr_ratio < 1.2:
-        print(f"⛔ {symbol} 낮은 RR 비율 ({rr_ratio:.2f}) → 알림 생략")
-        return None
-
-    rr_label = f"⚠ 수익/손실 비율: {rr_ratio:.2f}" if rr_ratio < 1.2 else f"📐 수익/손실 비율: {rr_ratio:.2f}"
-
-    # 메시지 작성
-    msg = f"{symbol_prefix} [{symbol}]\n"
-    msg += f"🎯 진입 방향: {direction} (레버리지 {lev}배)\n"
-    msg += f"💡 추천 진입 강도: {stars}\n\n"
-    msg += f"📊 신호 근거: {entry_type}\n"
-    msg += f"💵 진입가: ${format_price(price)}\n"
-    msg += f"🛑 손절가(SL): ${format_price(stop_loss)}\n"
-    msg += f"🎯 익절가(TP): ${format_price(take_profit)}\n"
-    msg += f"{rr_label}\n"
-    msg += f"⏱️ (ATR: {format_price(atr)}, {df_5m.index[-1]})"
-
-    # SL 헌팅 알림
-    sl_alert_msg = check_sl_hunt_alert(symbol)
-    if sl_alert_msg:
-        msg += f"\n\n{sl_alert_msg}"
-
-    # 알림 전송
     send_telegram(msg)
     return msg

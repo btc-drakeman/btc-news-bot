@@ -1,23 +1,36 @@
 import requests
 
-BASE_URL = 'https://api.mexc.com'
+SPOT_BASE = 'https://api.mexc.com'
+FUTURES_BASE = 'https://contract.mexc.com'
 
-# 단일 심볼 현재가 조회
+def _futures_symbol(symbol: str) -> str:
+    return symbol.replace("USDT", "_USDT")
+
 def get_current_price(symbol: str):
+    """선물 가격 우선, 실패 시 현물로 폴백."""
     try:
-        endpoint = f"/api/v3/ticker/price"
-        res = requests.get(BASE_URL + endpoint, params={"symbol": symbol}, timeout=5)
-        res.raise_for_status()
-        return float(res.json()["price"])
-    except Exception as e:
-        print(f"⚠️ 가격 조회 실패: {symbol} → {e}")
-        return None
+        fsym = _futures_symbol(symbol)
+        r = requests.get(f"{FUTURES_BASE}/api/v1/contract/ticker",
+                         params={"symbol": fsym}, timeout=5)
+        r.raise_for_status()
+        data = r.json().get("data")
+        if isinstance(data, list) and data:
+            return float(data[0]["lastPrice"])
+        else:
+            return float(data["lastPrice"])
+    except Exception:
+        try:
+            r = requests.get(f"{SPOT_BASE}/api/v3/ticker/price",
+                             params={"symbol": symbol}, timeout=5)
+            r.raise_for_status()
+            return float(r.json()["price"])
+        except Exception:
+            return None
 
-# 다수 심볼 가격 조회 (SIMULATION용)
-def get_all_prices(symbols: list[str]) -> dict:
+def get_all_prices(symbols):
     prices = {}
-    for symbol in symbols:
-        price = get_current_price(symbol)
-        if price:
-            prices[symbol] = price
+    for s in symbols:
+        p = get_current_price(s)
+        if p is not None:
+            prices[s] = p
     return prices
