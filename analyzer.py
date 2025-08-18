@@ -4,7 +4,6 @@ from strategy import multi_frame_signal
 from config import SYMBOLS, SL_PCT, TP_PCT, format_price
 from notifier import send_telegram
 from simulator import add_virtual_trade
-from sl_hunt_monitor import check_sl_hunt_alert
 
 FUTURES_BASE = "https://contract.mexc.com"
 
@@ -65,10 +64,6 @@ def analyze_multi_tf(symbol: str):
         f"💵 진입: ${format_price(price)}\n"
         f"🛑 SL: ${format_price(sl)} | 🎯 TP: ${format_price(tp)}"
     )
-
-    sl_alert = check_sl_hunt_alert(symbol)
-    if sl_alert:
-        msg += f"\n\n{sl_alert}"
 
     send_telegram(msg)
     return msg
