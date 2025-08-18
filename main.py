@@ -14,20 +14,17 @@ def home():
 
 def strategy_loop():
     print("🚦 멀티프레임 전략 루프 시작")
-    already_ran = set()
+    last_run = 0
     while True:
         try:
-            now = datetime.datetime.utcnow()
-            # 매 5분 경계(00,05,10...)에서 한 번만 실행
-            if now.minute % 5 == 0 and now.second < 2:
-                key = now.strftime("%Y%m%d%H%M")
-                if key not in already_ran:
-                    for symbol in SYMBOLS:
-                        try:
-                            analyze_multi_tf(symbol)
-                        except Exception as e:
-                            print(f"❌ analyze_multi_tf({symbol}) 실패: {e}")
-                    already_ran.add(key)
+            now = time.time()
+            if now - last_run >= STRATEGY_INTERVAL_SECONDS:  # 설정값 사용
+                last_run = now
+                for symbol in SYMBOLS:
+                    try:
+                        analyze_multi_tf(symbol)
+                    except Exception as e:
+                        print(f"❌ analyze_multi_tf({symbol}) 실패: {e}")
             time.sleep(1)
         except Exception as e:
             print("루프 에러:", e)
