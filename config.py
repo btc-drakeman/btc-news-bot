@@ -32,3 +32,7 @@ def format_price(x: float) -> str:
     if x >= 0.1:  return f"{x:.4f}"
     if x >= 0.01: return f"{x:.5f}"
     return f"{x:.8f}"
+
+# 기존 내용들 그대로 두고, 맨 아래나 위쪽에 추가
+WS_INTERVALS = ["Min30", "Min15", "Min5"]  # 멀티프레임과 매칭
+
