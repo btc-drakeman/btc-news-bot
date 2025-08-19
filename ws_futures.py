@@ -101,12 +101,20 @@ class FuturesWS(threading.Thread):
             for iv in self.intervals:
                 sub = {"method": "sub.kline", "param": {"symbol": fs, "interval": iv}}
                 ws.send(json.dumps(sub))
+                time.sleep(0.06)
 
     def on_message(self, ws, msg):
         try:
             data = json.loads(msg)
         except Exception:
             return
+
+        if isinstance(data, dict) and ("ping" in data or data.get("method") == "ping"):
+            try:
+                ws.send(json.dumps({"method": "pong"}))
+            except: pass
+            return
+
         ch = data.get("channel") or data.get("method") or ""
         if "kline" in ch and "data" in data:
             payload = data["data"]
