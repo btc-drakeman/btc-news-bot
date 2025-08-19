@@ -4,6 +4,8 @@ from strategy import multi_frame_signal
 from config import SYMBOLS, SL_PCT, TP_PCT, format_price
 from notifier import send_telegram
 from simulator import add_virtual_trade
+import time
+from http_client import SESSION
 
 FUTURES_BASE = "https://contract.mexc.com"
 
@@ -14,7 +16,7 @@ def _map_interval(iv: str) -> str:
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
     fsym = symbol.replace("USDT", "_USDT")
     kline_type = _map_interval(interval)
-    r = requests.get(f"{FUTURES_BASE}/api/v1/contract/kline/{fsym}",
+    r = SESSION.get(f"{FUTURES_BASE}/api/v1/contract/kline/{fsym}",
                      params={"type": kline_type, "limit": limit}, timeout=8)
     r.raise_for_status()
     raw = r.json()["data"]
@@ -28,15 +30,21 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
     return df
 
 def analyze_multi_tf(symbol: str):
-    print(f"🔍 멀티프레임 전략 분석 시작: {symbol}")
+    print(f"🔍 멀티프레임 전략 분석 시작: {symbol}", flush=True)
+
+    t0 = time.perf_counter()
     df_30 = fetch_ohlcv(symbol, "30m", 150)
     df_15 = fetch_ohlcv(symbol, "15m", 150)
     df_5  = fetch_ohlcv(symbol, "5m",  150)
+    print(f"⏱️ 데이터 수집 {symbol}: {time.perf_counter()-t0:.2f}s", flush=True)
 
+    t1 = time.perf_counter()
     signal = multi_frame_signal(df_30, df_15, df_5)
+    print(f"⏱️ 시그널 계산 {symbol}: {time.perf_counter()-t1:.2f}s", flush=True)
+
     if signal == (None, None):
-        print(f"📭 {symbol} 전략 신호 없음")
-        print(f"✅ {symbol} 전략 분석 완료")
+        print(f"📭 {symbol} 전략 신호 없음", flush=True)
+        print(f"✅ {symbol} 전략 분석 완료", flush=True)
         return None
 
     direction, detail = signal
@@ -69,5 +77,5 @@ def analyze_multi_tf(symbol: str):
     )
 
     send_telegram(msg)
-    print(f"✅ {symbol} 전략 분석 완료")
+    print(f"✅ {symbol} 전략 분석 완료", flush=True)
     return msg

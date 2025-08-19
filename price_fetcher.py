@@ -1,4 +1,5 @@
 import requests
+from http_client import SECSSION
 
 SPOT_BASE = 'https://api.mexc.com'
 FUTURES_BASE = 'https://contract.mexc.com'
@@ -10,7 +11,7 @@ def get_current_price(symbol: str):
     """선물 가격 우선, 실패 시 현물로 폴백."""
     try:
         fsym = _futures_symbol(symbol)
-        r = requests.get(f"{FUTURES_BASE}/api/v1/contract/ticker",
+        r = SESSION.get(f"{FUTURES_BASE}/api/v1/contract/ticker",
                          params={"symbol": fsym}, timeout=5)
         r.raise_for_status()
         data = r.json().get("data")
@@ -20,7 +21,7 @@ def get_current_price(symbol: str):
             return float(data["lastPrice"])
     except Exception:
         try:
-            r = requests.get(f"{SPOT_BASE}/api/v3/ticker/price",
+            r = SESSION.get(f"{SPOT_BASE}/api/v3/ticker/price",
                              params={"symbol": symbol}, timeout=5)
             r.raise_for_status()
             return float(r.json()["price"])
