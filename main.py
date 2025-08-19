@@ -22,7 +22,7 @@ def run_one_symbol(symbol):
 MAX_WORKERS = 6
 PER_SYMBOL_TIMEOUT = 30
 
-def _run_one_symbol(symbol:str)
+def _run_one_symbol(symbol:str):
      try:
          analyze_multi_tf(symbol)
      except Exception as e:
