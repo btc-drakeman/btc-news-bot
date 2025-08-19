@@ -7,9 +7,6 @@ from strategy_spring import analyze_spring_signal
 import time, datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-MAX_WORKERS = 6
-PER_SYMBOL_TIMEOUT = 30
-
 app = Flask(__name__)
 
 @app.route('/')
@@ -21,6 +18,15 @@ def run_one_symbol(symbol):
         analyze_multi_tf(symbol)
     except Exception as e:
         print(f"❌ analyze_multi_tf({symbol}) 실패: {e}", flush=True)
+
+MAX_WORKERS = 6
+PER_SYMBOL_TIMEOUT = 30
+
+def _run_one_symbol(symbol:str)
+     try:
+         analyze_multi_tf(symbol)
+     except Exception as e:
+         print(f"❌ analyze_multi_tf({symbol}) 실패: {e}", flush=True)
 
 def strategy_loop():
     print("🚦 멀티프레임 전략 루프 시작", flush=True)
@@ -46,21 +52,21 @@ def strategy_loop():
             time.sleep(1)
 
 def spring_strategy_loop():
-    print("🌱 스프링 전략 루프 시작")
+    print("🌱 스프링 전략 루프 시작", flush=True)
     while True:
         try:
             for symbol in SYMBOLS:
                 try:
                     analyze_spring_signal(symbol, "5m", 200)
                 except Exception as e:
-                    print(f"❌ spring({symbol}) 실패: {e}")
+                    print(f"❌ spring({symbol}) 실패: {e}", flush=True)
             time.sleep(30)
         except Exception as e:
-            print("스프링 루프 에러:", e)
+            print("스프링 루프 에러:", e, flush=True)
             time.sleep(1)
 
 def monitor_price_loop():
-    print("💹 포지션 모니터링 루프 시작")
+    print("💹 포지션 모니터링 루프 시작", flush=True)
     check_positions()
 
 if __name__ == '__main__':
