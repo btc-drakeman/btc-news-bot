@@ -1,4 +1,5 @@
-# 상단 import 보강
+# analyzer.py
+
 import requests
 import pandas as pd
 import time
@@ -7,45 +8,64 @@ from config import SYMBOLS, SL_PCT, TP_PCT, format_price
 from notifier import send_telegram
 from simulator import add_virtual_trade
 from http_client import SESSION
-from ws_futures import get_ws_df  # ← 추가
+from ws_futures import get_ws_df
 
 FUTURES_BASE = "https://contract.mexc.com"
 
 def _map_interval(iv: str) -> str:
-    # REST는 '5m', WS는 'Min5' 명칭
+    # REST/WS 공통 명칭
     m = {"1m":"Min1", "5m":"Min5", "15m":"Min15", "30m":"Min30", "1h":"Min60"}
     return m.get(iv, "Min5")
 
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
-    # 1) WS 저장소 먼저 시도
+    """
+    1) WS 버퍼 우선 사용(확정봉만)
+    2) 부족하면 선물 REST 폴백
+       * 중요: 파라미터 이름은 'interval' (이전 'type' → ❌)
+       * limit 파라미터는 미지원이라 제거 (start/end 미지정 시 최근 2000개 반환)
+    """
+    # WS 먼저
     ws_iv = _map_interval(interval)
     df_ws = get_ws_df(symbol, ws_iv, limit)
     if df_ws is not None and len(df_ws) >= 30:
         return df_ws
 
-    # 2) 폴백: 기존 REST
+    # REST 폴백
     fsym = symbol.replace("USDT", "_USDT")
-    kline_type = _map_interval(interval)
-    r = SESSION.get(f"{FUTURES_BASE}/api/v1/contract/kline/{fsym}",
-                    params={"type": kline_type, "limit": limit}, timeout=8)
-    r.raise_for_status()
-    raw = r.json().get("data", [])
-    if not raw:
-        raise ValueError(f"{symbol} 선물 K라인 데이터 없음")
-    df = pd.DataFrame(raw, columns=[
-        "ts","open","high","low","close","volume","turnover"
-    ])
-    for col in ["open","high","low","close","volume"]:
-        df[col] = df[col].astype(float)
-    df["ts"] = pd.to_datetime(df["ts"], unit="ms")
-    return df.set_index("ts")
+    kline_interval = _map_interval(interval)
+
+    # 재시도(가벼운) – API가 가끔 빈 data를 줄 때 방어
+    last_err = None
+    for _ in range(2):
+        try:
+            r = SESSION.get(
+                f"{FUTURES_BASE}/api/v1/contract/kline/{fsym}",
+                params={"interval": kline_interval},  # ✅ 'interval' 로 교체, limit 제거
+                timeout=8
+            )
+            r.raise_for_status()
+            raw = r.json().get("data", [])
+            if raw:
+                df = pd.DataFrame(raw, columns=[
+                    "ts","open","high","low","close","volume","turnover"
+                ])
+                for col in ["open","high","low","close","volume"]:
+                    df[col] = df[col].astype(float)
+                df["ts"] = pd.to_datetime(df["ts"], unit="ms")
+                return df.set_index("ts")
+            last_err = "empty-data"
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(0.2)
+
+    raise ValueError(f"{symbol} 선물 K라인 데이터 없음 (interval={kline_interval}, err={last_err})")
 
 def analyze_multi_tf(symbol: str):
     print(f"🔍 멀티프레임 전략 분석 시작: {symbol}", flush=True)
     t0 = time.perf_counter()
     df_30 = fetch_ohlcv(symbol, "30m", 150)
     df_15 = fetch_ohlcv(symbol, "15m", 150)
-    df_5  = fetch_ohlcv(symbol, "5m",  150)
+    df_5  = fetch_ohlcv(symbol,  "5m", 150)
     print(f"⏱️ 데이터 수집 {symbol}: {time.perf_counter()-t0:.2f}s", flush=True)
 
     t1 = time.perf_counter()
