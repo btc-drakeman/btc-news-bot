@@ -5,8 +5,8 @@ from requests.adapters import HTTPAdapter, Retry
 def make_session():
     s = requests.Session()
     retries = Retry(
-        total=3,                # 최대 3번 재시도
-        backoff_factor=0.6,     # 0.6, 1.2, 2.4초 ...
+        total=3,
+        backoff_factor=0.6,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
         raise_on_status=False,
@@ -17,4 +17,3 @@ def make_session():
     return s
 
 SESSION = make_session()
-

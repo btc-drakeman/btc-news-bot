@@ -1,5 +1,5 @@
 import requests
-from http_client import SECSSION
+from http_client import SESSION
 
 SPOT_BASE = 'https://api.mexc.com'
 FUTURES_BASE = 'https://contract.mexc.com'
