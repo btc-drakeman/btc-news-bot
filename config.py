@@ -33,11 +33,15 @@ TP_PCT = 0.016 # 1.6% 익절 (R:R ~ 1:1.6)
 
 # 포맷팅 자릿수
 def format_price(x: float) -> str:
-if x >= 1000: return f"{x:.2f}"
-if x >= 1: return f"{x:.3f}"
-if x >= 0.1: return f"{x:.4f}"
-if x >= 0.01: return f"{x:.5f}"
-return f"{x:.8f}"
+    if x >= 1000:
+        return f"{x:.2f}"
+    if x >= 1:
+        return f"{x:.3f}"
+    if x >= 0.1:
+        return f"{x:.4f}"
+    if x >= 0.01:
+        return f"{x:.5f}"
+    return f"{x:.8f}"
 
 
 # WS 구독 인터벌
