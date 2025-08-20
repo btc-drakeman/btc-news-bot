@@ -3,7 +3,6 @@ from threading import Thread
 from config import SYMBOLS, STRATEGY_INTERVAL_SECONDS, WS_INTERVALS   # ← WS_INTERVALS 추가
 from analyzer import analyze_multi_tf
 from simulator import check_positions
-from strategy_spring import analyze_spring_signal
 from ws_futures import FuturesWS, get_event_queue  # ← 추가
 import time, datetime
 
@@ -47,21 +46,6 @@ def event_loop():
             print("이벤트 루프 에러:", e, flush=True)
             time.sleep(0.2)
 
-
-def spring_strategy_loop():
-    print("🌱 스프링 전략 루프 시작")
-    while True:
-        try:
-            for symbol in SYMBOLS:
-                try:
-                    analyze_spring_signal(symbol, "5m", 200)
-                except Exception as e:
-                    print(f"❌ spring({symbol}) 실패: {e}")
-            time.sleep(30)
-        except Exception as e:
-            print("스프링 루프 에러:", e)
-            time.sleep(1)
-
 def monitor_price_loop():
     print("💹 포지션 모니터링 루프 시작")
     check_positions()
@@ -79,7 +63,6 @@ if __name__ == '__main__':
     # 3) (선택) 5분 주기 루프는 백업용으로 유지하거나 주기를 늘려도 됨
     t1 = Thread(target=strategy_loop, daemon=True)
     t2 = Thread(target=monitor_price_loop, daemon=True)
-    t3 = Thread(target=spring_strategy_loop, daemon=True)
-    t1.start(); t2.start(); t3.start()
+    t1.start(); t2.start()
 
     app.run(host='0.0.0.0', port=8080)
