@@ -34,4 +34,4 @@ def format_price(x: float) -> str:
     return f"{x:.8f}"
 
 # 기존 내용들 그대로 두고, 맨 아래나 위쪽에 추가
-WS_INTERVALS = ["Min5"] 
+WS_INTERVALS = ["Min1", "Min5"] 

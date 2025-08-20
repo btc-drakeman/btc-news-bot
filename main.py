@@ -4,6 +4,7 @@ from config import SYMBOLS, STRATEGY_INTERVAL_SECONDS, WS_INTERVALS   # ← WS_I
 from analyzer import analyze_multi_tf
 from simulator import check_positions
 from ws_futures import FuturesWS, get_event_queue  # ← 추가
+from prebreakout import prebreakout_loop
 import time, datetime
 
 app = Flask(__name__)
@@ -34,13 +35,20 @@ def strategy_loop():
 def event_loop():
     print("⚡ 이벤트 기반 분석 루프 시작", flush=True)
     q = get_event_queue()
-    last_seen = {}  # symbol -> last_closed_ts (중복 방지)
+    last_seen = {}  # (symbol, interval) -> last_closed_ts
     while True:
         try:
             symbol, interval, ts = q.get()
-            if last_seen.get(symbol) == ts:
+
+            # 🔒 5분봉만 처리, 나머지(1m 등)는 무시
+            if interval != "Min5":
                 continue
-            last_seen[symbol] = ts
+
+            key = (symbol, interval)
+            if last_seen.get(key) == ts:
+                continue
+            last_seen[key] = ts
+
             analyze_multi_tf(symbol)  # 5분봉 마감 즉시 멀티프레임 분석
         except Exception as e:
             print("이벤트 루프 에러:", e, flush=True)
@@ -64,5 +72,6 @@ if __name__ == '__main__':
     t1 = Thread(target=strategy_loop, daemon=True)
     t2 = Thread(target=monitor_price_loop, daemon=True)
     t1.start(); t2.start()
+    tX = Thread(target=prebreakout_loop, daemon=True); tX.start()
 
     app.run(host='0.0.0.0', port=8080)
