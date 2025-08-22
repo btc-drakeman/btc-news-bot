@@ -51,10 +51,11 @@ class CandleStore:
             h = float(kline.get("h"))
             l = float(kline.get("l"))
             c = float(kline.get("c"))
-            v = float(kline.get("v") if kline.get("v") is not None else kline.get("q"))  # ✅ q 매핑
+            # MEXC는 v 또는 q로 오기도 함 → 우선 v, 없으면 q 사용
+            v = kline.get("v")
+            v = float(v if v is not None else kline.get("q"))
         except Exception:
             return
-        # 마감 여부는 여기선 안 박고, get_df에서 필터링 없이 리턴 (이벤트는 별도 판정)
         row = {"t": t, "o": o, "h": h, "l": l, "c": c, "v": v}
         with self.lock:
             buf = self.buffers[(symbol, interval)]
@@ -83,6 +84,7 @@ class FuturesWS(threading.Thread):
     """
     MEXC 선물 WS: sub.kline 구독 → STORE 업데이트 & 5분봉 '시간기반' 마감 이벤트 큐잉.
       - ✅ TCP ping 비활성화 (ping_interval=0), 10초 주기 앱 ping/pong
+      - ✅ 유휴 감시(마지막 메시지 시각 기준)로 블로킹 감지 시 강제 close → 재연결 유도
       - ✅ 확정봉: server_ts(또는 local) ≥ open_t + interval_ms → closed
       - ✅ v 대신 q를 volume으로 사용, t(초)를 ms로 변환
     """
@@ -93,7 +95,10 @@ class FuturesWS(threading.Thread):
         self.ws = None
         self.running = True
         self._hb_thread = None
+        self._idle_thread = None
         self._closed_once = set()  # (symbol, interval, open_t_ms) 중복 방지
+        self._last_msg_ts = 0
+        self._idle_limit_sec = 75  # 이 시간 이상 수신 없으면 강제 종료
 
     def run(self):
         if websocket is None:
@@ -110,7 +115,7 @@ class FuturesWS(threading.Thread):
                     on_error=self.on_error,
                     on_close=self.on_close,
                 )
-                # ✅ TCP ping 끄고(App ping만 사용)
+                # ✅ TCP ping 끄고(App ping만 사용) — 일부 거래소/네트 경합 이슈 회피
                 self.ws.run_forever(ping_interval=0)
                 backoff = min(backoff + 3, 30)
                 print(f"WS 재연결 대기 {backoff}s", flush=True)
@@ -129,6 +134,9 @@ class FuturesWS(threading.Thread):
 
     def on_open(self, ws):
         print("🔌 WS 연결됨: 선물 kline 구독 시작", flush=True)
+        self._last_msg_ts = time.time()
+
+        # 구독
         for s in self.symbols:
             fs = s.replace("USDT", "_USDT")
             for iv in self.intervals:
@@ -151,7 +159,25 @@ class FuturesWS(threading.Thread):
         self._hb_thread = threading.Thread(target=heartbeat, daemon=True)
         self._hb_thread.start()
 
+        # 유휴 감시: 일정 시간 수신 없으면 강제 close → run_forever 탈출 후 재연결
+        def idle_watch():
+            while self.running and self.ws is ws:
+                idle = time.time() - self._last_msg_ts
+                if idle > self._idle_limit_sec:
+                    print(f"⚠️ WS 유휴 {int(idle)}s → 강제 종료 시도", flush=True)
+                    try:
+                        ws.close()
+                    except:
+                        pass
+                    return
+                time.sleep(15)
+        self._idle_thread = threading.Thread(target=idle_watch, daemon=True)
+        self._idle_thread.start()
+
     def on_message(self, ws, msg):
+        # 어떤 메시지든 수신하면 타임스탬프 갱신
+        self._last_msg_ts = time.time()
+
         try:
             data = json.loads(msg)
         except Exception:
@@ -205,7 +231,7 @@ class FuturesWS(threading.Thread):
             int_ms = INTERVAL_MS.get(interval, 300_000)  # 기본 5m
             now_ms = server_ts_ms if server_ts_ms else int(time.time() * 1000)
 
-            # 마감 판정: 이제 시간이 캔들 윈도우를 초과했는가?
+            # 마감 판정: 시간이 캔들 윈도우를 초과했는가?
             if now_ms >= open_ms + int_ms - 1500:  # 1.5s 여유
                 key = (symbol, interval, open_ms)
                 if key not in self._closed_once:
