@@ -62,22 +62,23 @@ def multi_frame_signal(
     if direction == "LONG" and rsi <= 40:
         rsi_score += 1.0
 
-    # 거래량 보조
+    # 거래량 보조: 20기간 중앙값 대비 1.05배 이상이면 OK (노이즈↓)
     vol5 = df_5m["volume"]
-    volume_check = bool(vol5.iloc[-1] > vol5.rolling(10).mean().iloc[-1])
+    base = vol5.rolling(20).median().iloc[-1]
+    volume_check = bool(vol5.iloc[-1] >= base * 1.05)
 
     # raw score
     raw_score = 0.0
     if cond_15m: raw_score += 1.0
     if cond_5m:  raw_score += 1.0
-    if volume_check: raw_score += 0.5
+    if volume_check: raw_score += 0.8   # ← 0.5 → 0.8 로 상향
     raw_score += rsi_score
 
-    # 일관성 패널티
+    # 일관성 패널티 (완화)
     if not cond_15m and not cond_5m:
-        raw_score -= 1.0
+        raw_score -= 0.8                 # ← 기존 -1.0
     elif cond_15m != cond_5m:
-        raw_score -= 0.5
+        raw_score -= 0.25                # ← 기존 -0.5
 
     # p-스코어 변환
     p = _sigmoid(SIGMOID_A * (raw_score - SIGMOID_C))
