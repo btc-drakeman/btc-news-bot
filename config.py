@@ -54,4 +54,4 @@ WS_INTERVALS = ["Min1", "Min5"]
 # p = sigmoid(A * (raw_score - C))
 SIGMOID_A = 1.5 # 기울기(가파름)
 SIGMOID_C = 2.5 # 중심점(이전 컷 2.5를 0.5로 맵핑)
-P_THRESHOLD = 0.60 # 신호 컷(초기값): 0.58~0.65 범위에서 추후 조정 권장
+P_THRESHOLD = 0.58 # 신호 컷(초기값): 0.58~0.65 범위에서 추후 조정 권장
