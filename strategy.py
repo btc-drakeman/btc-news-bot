@@ -1,6 +1,7 @@
 import math
 import pandas as pd
 from config import SIGMOID_A, SIGMOID_C, P_THRESHOLD
+import stats  # 텔레메트리 기록용
 
 def get_trend(df: pd.DataFrame, ema_period: int = 20) -> str:
     df = df.copy()
@@ -33,13 +34,17 @@ def _rsi(series: pd.Series, period: int = 14) -> float:
 def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-x))
 
-def multi_frame_signal(df_30m: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.DataFrame):
+def multi_frame_signal(
+    df_30m: pd.DataFrame,
+    df_15m: pd.DataFrame,
+    df_5m: pd.DataFrame,
+    symbol: str = "NA"   # ⬅️ analyzer에서 넘겨줄 심볼(텔레메트리용)
+):
     """
-    기존 점수 로직 유지 + p-스코어(확률) 변환 + p 컷 적용
-      - raw_score 계산은 현 구조 유지
+    기존 점수 로직 유지 + p-스코어 변환 + p 컷 적용 + 텔레메트리 기록
       - p = sigmoid(SIGMOID_A * (raw_score - SIGMOID_C))
       - p >= P_THRESHOLD 이면 신호 발생
-      - detail 문자열에 p/raw/조건 요약 포함
+      - stats.record(...)로 최근 분포를 /tmp/mf_metrics.csv에 누적
     """
     # 30m 방향성
     trend_30 = get_trend(df_30m, 20)
@@ -77,15 +82,38 @@ def multi_frame_signal(df_30m: pd.DataFrame, df_15m: pd.DataFrame, df_5m: pd.Dat
     # p-스코어 변환
     p = _sigmoid(SIGMOID_A * (raw_score - SIGMOID_C))
 
-    # 디버그 로그
+    # 디버그 + 보조 로그
     try:
         print(
             f"[DEBUG] direction={direction} raw={raw_score:.2f} p={p:.3f} "
             f"15m={int(cond_15m)} 5m={int(cond_5m)} RSI={rsi:.1f} VOL={int(volume_check)}",
             flush=True
         )
+        if cond_15m and cond_5m:
+            print("[CORE] 15m&5m EMA 동시 ON", flush=True)
+        if 0.55 <= p < P_THRESHOLD:
+            print(
+                f"[NEAR] p={p:.3f} raw={raw_score:.2f} 15m={int(cond_15m)} 5m={int(cond_5m)} "
+                f"vol={int(volume_check)} rsi_score={rsi_score}",
+                flush=True
+            )
     except Exception:
         pass
+
+    # ⬇️ 텔레메트리 기록 (예외는 무시하고 진행)
+    try:
+        stats.record(
+            symbol=symbol,
+            direction_hint=direction,
+            raw=float(raw_score),
+            p=float(p),
+            cond_15m=bool(cond_15m),
+            cond_5m=bool(cond_5m),
+            rsi=float(rsi),
+            vol_ok=bool(volume_check),
+        )
+    except Exception as e:
+        print(f"[stats] record error: {e}", flush=True)
 
     if p >= P_THRESHOLD:
         detail = (

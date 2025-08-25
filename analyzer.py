@@ -69,7 +69,7 @@ def analyze_multi_tf(symbol: str):
     print(f"⏱️ 데이터 수집 {symbol}: {time.perf_counter()-t0:.2f}s", flush=True)
 
     t1 = time.perf_counter()
-    signal = multi_frame_signal(df_30, df_15, df_5)
+    signal = multi_frame_signal(df_30, df_15, df_5, symbol=symbol)
     print(f"⏱️ 시그널 계산 {symbol}: {time.perf_counter()-t1:.2f}s", flush=True)
 
     if signal == (None, None):
