@@ -13,17 +13,10 @@ from ws_futures import get_ws_df
 FUTURES_BASE = "https://contract.mexc.com"
 
 def _map_interval(iv: str) -> str:
-    # REST/WS 공통 명칭
     m = {"1m": "Min1", "5m": "Min5", "15m": "Min15", "30m": "Min30", "1h": "Min60"}
     return m.get(iv, "Min5")
 
 def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
-    """
-    1) WS 버퍼 우선 사용(확정봉만)
-    2) 부족하면 선물 REST 폴백
-       * 중요: 파라미터 이름은 'interval' (이전 'type' → ❌)
-       * limit 파라미터는 미지원이라 제거 (start/end 미지정 시 최근 2000개 반환)
-    """
     # WS 먼저
     ws_iv = _map_interval(interval)
     df_ws = get_ws_df(symbol, ws_iv, limit)
@@ -34,13 +27,12 @@ def fetch_ohlcv(symbol: str, interval: str, limit: int = 150) -> pd.DataFrame:
     fsym = symbol.replace("USDT", "_USDT")
     kline_interval = _map_interval(interval)
 
-    # 재시도(가벼운) – API가 가끔 빈 data를 줄 때 방어
     last_err = None
     for _ in range(2):
         try:
             r = SESSION.get(
                 f"{FUTURES_BASE}/api/v1/contract/kline/{fsym}",
-                params={"interval": kline_interval},  # ✅ 'interval' 사용, limit 제거
+                params={"interval": kline_interval},
                 timeout=8
             )
             r.raise_for_status()
@@ -66,26 +58,35 @@ def analyze_multi_tf(symbol: str):
     df_30 = fetch_ohlcv(symbol, "30m", 150)
     df_15 = fetch_ohlcv(symbol, "15m", 150)
     df_5  = fetch_ohlcv(symbol,  "5m", 150)
+    # ✅ 추가: 1분 데이터도 로드해서 strategy로 전달 (이전에는 None이라 무조건 insufficient_data)
+    df_1  = fetch_ohlcv(symbol,  "1m", 150)
     print(f"⏱️ 데이터 수집 {symbol}: {time.perf_counter()-t0:.2f}s", flush=True)
 
     t1 = time.perf_counter()
-    signal = multi_frame_signal(df_30, df_15, df_5, symbol=symbol)
+    # ✅ 변경: df_1을 4번째 인자로 전달
+    direction, detail = multi_frame_signal(df_30, df_15, df_5, df_1)
     print(f"⏱️ 시그널 계산 {symbol}: {time.perf_counter()-t1:.2f}s", flush=True)
 
-    if signal == (None, None):
-        print(f"📭 {symbol} 전략 신호 없음", flush=True)
+    # ✅ 추가: NONE/데이터부족 알림 차단 (스팸 방지)
+    if direction == "NONE" or (isinstance(detail, dict) and detail.get("reason") == "insufficient_data"):
+        print(f"📭 {symbol} 전략 신호 없음 (reason={detail.get('reason') if isinstance(detail, dict) else None})", flush=True)
         print(f"✅ {symbol} 전략 분석 완료", flush=True)
         return None
 
-    direction, detail = signal
     price = df_5["close"].iloc[-1]
 
+    # LONG/SHORT일 때만 SL/TP 산출
     if direction == "LONG":
         sl = price * (1 - SL_PCT)
         tp = price * (1 + TP_PCT)
-    else:
+    elif direction == "SHORT":
         sl = price * (1 + SL_PCT)
         tp = price * (1 - TP_PCT)
+    else:
+        # 혹시 모를 예외 방지
+        print(f"📭 {symbol} 미지원 방향: {direction}", flush=True)
+        print(f"✅ {symbol} 전략 분석 완료", flush=True)
+        return None
 
     entry = {
         "symbol": symbol, "direction": direction, "entry": float(price),
@@ -93,7 +94,6 @@ def analyze_multi_tf(symbol: str):
     }
     add_virtual_trade(entry)
 
-    # detail 안에 p/raw/조건 요약 포함됨
     msg = (
         f"📊 멀티프레임: {symbol}\n"
         f"🧭 방향: {direction} ({detail})\n"

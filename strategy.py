@@ -232,10 +232,10 @@ def multi_frame_signal(*args, **kwargs) -> Tuple[str, Dict[str, Any]]:
     """
     df30, df15, df5, df1 = _coerce_frames(args, kwargs)
 
+    # ✅ 변경: 데이터 부족 시 entry/sl/tp를 넣지 않음(스팸 방지)
     if any(x is None or len(x) < 30 for x in [df30, df15, df5]) or df1 is None or len(df1) < 3:
         return "NONE", {
             "raw": 0.0, "15m": 0, "5m": 0, "RSI": float("nan"), "VOL": 0,
-            "entry": float("nan"), "sl": float("nan"), "tp": float("nan"),
             "reason": "insufficient_data"
         }
 
