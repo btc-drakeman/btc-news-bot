@@ -19,7 +19,7 @@ THREAD_FACTORIES = {}     # 재시작용 팩토리
 HEARTBEAT_LOCK = threading.Lock()
 
 # 옵션: 프리브레이크아웃 루프 켜기/끄기
-ENABLE_PREBREAKOUT = True   # 필요 없다면 False 로
+ENABLE_PREBREAKOUT = False   # 필요 없다면 False 로
 
 # 하트비트 갱신
 def beat(name: str):
