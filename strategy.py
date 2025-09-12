@@ -1,42 +1,35 @@
-# strategy.py
-import math
-import pandas as pd
-from typing import Tuple, Dict, Any
-import stats
+# strategy.py — Mean Reversion v1 (drop-in for analyzer.multi_frame_signal)
+# 기존 멀티프레임 추세전략 삭제 버전. 평균회귀(횡보장 전용)만 남김.
+# analyzer.py는 multi_frame_signal(df30, df15, df5, df1) 호출을 기대하므로 시그니처 유지.
 
-# ---------- 유틸 ----------
+import math
+from typing import Tuple, Dict, Any
+import numpy as np
+import pandas as pd
+import stats  # 텔레메트리(호출 시그니처 차이 있어도 try/except로 무시)
+
+# =========================
+# 유틸
+# =========================
 def _ema(s: pd.Series, span: int) -> pd.Series:
     return s.ewm(span=span, adjust=False).mean()
 
 def _sma(s: pd.Series, window: int) -> pd.Series:
-    return s.rolling(window=window, min_periods=max(1, window//2)).mean()
+    return s.rolling(window=window, min_periods=max(2, window//2)).mean()
 
-def calc_rsi(close: pd.Series, period: int = 14) -> pd.Series:
+def _rsi(close: pd.Series, period: int = 14) -> pd.Series:
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
     rs = gain / (loss.replace(0, 1e-12))
     return 100 - (100 / (1 + rs))
 
-def _calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     pc = df["close"].shift(1)
     tr = pd.concat([(df["high"]-df["low"]).abs(),
                     (df["high"]-pc).abs(),
                     (df["low"]-pc).abs()], axis=1).max(axis=1)
     return tr.rolling(period).mean()
-
-def _safe_last(series: pd.Series, default: float = float("nan")) -> float:
-    try: return float(series.iloc[-1])
-    except Exception: return default
-
-def _slope_positive(series: pd.Series, lookback: int = 5) -> bool:
-    return len(series) >= lookback+1 and series.iloc[-1] > series.iloc[-1-lookback]
-
-def _last_n_bars_below(series_close: pd.Series, series_ref: pd.Series, n_min=1, n_max=3) -> bool:
-    n = min(len(series_close), n_max)
-    if n < n_min: return False
-    recent = series_close.iloc[-n:]; ref = series_ref.iloc[-n:]
-    return (recent < ref).sum() >= n_min
 
 def _vwap(df: pd.DataFrame, lookback: int = 20) -> pd.Series:
     tp = (df["high"] + df["low"] + df["close"]) / 3.0
@@ -44,215 +37,203 @@ def _vwap(df: pd.DataFrame, lookback: int = 20) -> pd.Series:
     vv = df["volume"].rolling(lookback).sum()
     return pv / (vv + 1e-12)
 
-def _fib_retracement_ok(df5: pd.DataFrame, lookback: int = 20) -> Tuple[bool, Dict[str, Any]]:
-    """간단 버전: 최근 구간 [LL, HH] 대비 현재가 되돌림 비율이 0.382~0.618"""
-    ref = df5.iloc[:-1] if len(df5) > 1 else df5
-    hh = float(ref['high'].rolling(lookback).max().iloc[-1])
-    ll = float(ref['low'].rolling(lookback).min().iloc[-1])
-    px = float(df5['close'].iloc[-1])
-    if hh <= ll: return False, {"fib": None}
-    ratio_down = (hh - px) / (hh - ll + 1e-12)  # 롱 기준
-    ok = 0.382 <= ratio_down <= 0.618
-    return ok, {"fib_ratio": float(ratio_down)}
+def _bb(close: pd.Series, period: int = 20, k: float = 2.0):
+    ma = close.rolling(period).mean()
+    sd = close.rolling(period).std(ddof=0)
+    upper = ma + k*sd
+    lower = ma - k*sd
+    width = (upper - lower) / (ma + 1e-12)
+    return upper, ma, lower, width
 
-# ---------- 캔들 패턴 ----------
-def _bullish_engulfing_1m(df1: pd.DataFrame) -> bool:
-    if "open" not in df1.columns or len(df1) < 3: return False
-    o1, c1 = df1["open"].iloc[-1], df1["close"].iloc[-1]
-    o2, c2 = df1["open"].iloc[-2], df1["close"].iloc[-2]
-    return (c1 > o1) and (c1 > max(o2, c2)) and (o1 <= min(o2, c2))
+def _safe_last(x, default=float("nan")):
+    try: return float(x.iloc[-1])
+    except Exception: return default
 
-def _bearish_engulfing_1m(df1: pd.DataFrame) -> bool:
-    if "open" not in df1.columns or len(df1) < 3: return False
-    o1, c1 = df1["open"].iloc[-1], df1["close"].iloc[-1]
-    o2, c2 = df1["open"].iloc[-2], df1["close"].iloc[-2]
-    return (c1 < o1) and (c1 < min(o2, c2)) and (o1 >= max(o2, c2))
+# =========================
+# 평균회귀용 조건 (정교화)
+# =========================
+# (1) 횡보장 필터: BB폭/ATR가 평소 대비 작고, 15m 추세 기울기 완만
+RANGE_BBW_MAX = 0.75    # 현재 BB 폭 <= 과거 중앙값 * 0.75
+RANGE_ATR_MAX = 0.75    # 현재 ATR <= 과거 중앙값 * 0.75
+SLOPE_EPS     = 0.001   # 15m EMA34 기울기(절대) 허용 최대(평탄함)
 
-# ---------- 추세 ----------
-def _trend_up_30m15m(df30: pd.DataFrame, df15: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-    ema50_30 = _ema(df30["close"], 50)
-    ema20_15 = _ema(df15["close"], 20); ema50_15 = _ema(df15["close"], 50)
-    cond_30 = (_safe_last(df30["close"]) > _safe_last(ema50_30)) and _slope_positive(ema50_30, 5)
-    cond_15 = (_safe_last(ema20_15) > _safe_last(ema50_15)) and (_safe_last(df15["close"]) > _safe_last(ema20_15))
-    # 보조 가점: 최근 HH/HL or 15m RSI>48
-    hh_ok = df30["high"].rolling(6).apply(lambda x: (pd.Series(x).is_monotonic_increasing)).iloc[-1] == 1.0
-    hl_ok = df30["low"].rolling(6).apply(lambda x: (pd.Series(x).is_monotonic_increasing)).iloc[-1] == 1.0
-    rsi15 = _safe_last(calc_rsi(df15["close"], 14))
-    aux = int((hh_ok and hl_ok) or (rsi15 > 48))
-    ok = bool(cond_30 and cond_15)
-    return ok, {"cond_30": int(cond_30), "cond_15": int(cond_15), "aux": aux}
+# (2) 과도 괴리 조건: VWAP/MA 대비 이탈폭이 충분
+VWAP_DEV_MIN  = 0.008   # 0.8% 이상 괴리
+MA_DEV_MIN    = 0.006   # 0.6% 이상 괴리
 
-def _trend_down_30m15m(df30: pd.DataFrame, df15: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-    ema50_30 = _ema(df30["close"], 50)
-    ema20_15 = _ema(df15["close"], 20); ema50_15 = _ema(df15["close"], 50)
-    cond_30 = (_safe_last(df30["close"]) < _safe_last(ema50_30)) and (not _slope_positive(ema50_30, 5))
-    cond_15 = (_safe_last(ema20_15) < _safe_last(ema50_15)) and (_safe_last(df15["close"]) < _safe_last(ema20_15))
-    hh_ok = df30["high"].rolling(6).apply(lambda x: (pd.Series(x).is_monotonic_decreasing)).iloc[-1] == 1.0
-    hl_ok = df30["low"].rolling(6).apply(lambda x: (pd.Series(x).is_monotonic_decreasing)).iloc[-1] == 1.0
-    rsi15 = _safe_last(calc_rsi(df15["close"], 14))
-    aux = int((hh_ok and hl_ok) or (rsi15 < 52))  # 숏 보조(느슨)
-    ok = bool(cond_30 and cond_15)
-    return ok, {"cond_30": int(cond_30), "cond_15": int(cond_15), "aux": aux}
+# (3) 오실레이터 극단값: RSI 기준
+RSI_BUY_MAX   = 35.0    # 이하면 과매도(롱 후보)
+RSI_SELL_MIN  = 65.0    # 이하면 과매수 해제, 이상이면 과매수(숏 후보)
 
-# ---------- 눌림(5m) ----------
-def _pullback_long_5m(df5: pd.DataFrame, df15: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-    ema20_5 = _ema(df5["close"], 20); ema50_5 = _ema(df5["close"], 50)
-    atr15 = _calc_atr(df15, 14); ema20_15 = _ema(df15["close"], 20)
-    below_ema20_recent = _last_n_bars_below(df5["close"], ema20_5, 1, 3)
-    touch_ema50_or_near = (_safe_last(df5["low"]) <= _safe_last(ema50_5)) or \
-                          (abs(_safe_last(df5["close"]) - _safe_last(ema20_15)) <= (0.25 * _safe_last(atr15)))
-    vol_contract = _safe_last(df5["volume"].iloc[-3:].mean()) < _safe_last(_sma(df5["volume"], 20))
-    fib_ok, fib_meta = _fib_retracement_ok(df5, 20)  # 선택
-    ok = bool(below_ema20_recent and touch_ema50_or_near and vol_contract)
-    return ok, {"below_ema20_recent": int(below_ema20_recent),
-                "touch_ema50_or_near": int(touch_ema50_or_near),
-                "vol_contract": int(vol_contract),
-                "fib_ok": int(fib_ok), "fib": fib_meta.get("fib_ratio")}
+# (4) 1분 확인: 반전 캔들 + 거래량
+ONE_MIN_VOL_K = 1.00    # 1m 마지막 봉 거래량 ≥ 롤링 중앙값*1.0
+ONE_MIN_LOOK  = 20
 
-def _pullback_short_5m(df5: pd.DataFrame, df15: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-    ema20_5 = _ema(df5["close"], 20); ema50_5 = _ema(df5["close"], 50)
-    atr15 = _calc_atr(df15, 14); ema20_15 = _ema(df15["close"], 20)
-    above_ema20_recent = _last_n_bars_below(-df5["close"], -ema20_5, 1, 3)
-    touch_ema50_or_near = (_safe_last(df5["high"]) >= _safe_last(ema50_5)) or \
-                          (abs(_safe_last(df5["close"]) - _safe_last(ema20_15)) <= (0.25 * _safe_last(atr15)))
-    vol_contract = _safe_last(df5["volume"].iloc[-3:].mean()) < _safe_last(_sma(df5["volume"], 20))
-    # 간단 숏용 fib
-    ref = df5.iloc[:-1] if len(df5) > 1 else df5
-    ll = float(ref['low'].rolling(20).min().iloc[-1]); hh = float(ref['high'].rolling(20).max().iloc[-1]); px = float(df5['close'].iloc[-1])
-    ratio_up = (px - ll)/(hh - ll + 1e-12)
-    fib_ok = 0.382 <= ratio_up <= 0.618
-    ok = bool(above_ema20_recent and touch_ema50_or_near and vol_contract)
-    return ok, {"above_ema20_recent": int(above_ema20_recent),
-                "touch_ema50_or_near": int(touch_ema50_or_near),
-                "vol_contract": int(vol_contract),
-                "fib_ok": int(fib_ok)}
+def _range_regime(df15: pd.DataFrame, df5: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
+    # 5m BB, ATR 기준으로 변동성 축소 확인
+    _, _, _, bbw = _bb(df5["close"], 20, 2.0)
+    atr5 = _atr(df5, 14)
+    bbw_med = float(bbw.rolling(50).median().iloc[-1])
+    atr_med = float(atr5.rolling(50).median().iloc[-1])
+    bbw_ratio = float(bbw.iloc[-1] / (bbw_med + 1e-12))
+    atr_ratio = float(atr5.iloc[-1] / (atr_med + 1e-12))
 
-# ---------- 트리거(1m/5m) ----------
-def _trigger_long(df5: pd.DataFrame, df1: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-    # 1m 조건
-    ema20_1 = _ema(df1["close"], 20)
-    v1 = df1["volume"]; vol_ok_1m = _safe_last(v1) > _safe_last(_sma(v1, 20))
-    engulf = _bullish_engulfing_1m(df1)
-    reclaim_1m = (df1["close"].iloc[-1] > ema20_1.iloc[-1]) and (df1["close"].iloc[-2] <= ema20_1.iloc[-2])
-    vwap1 = _vwap(df1, 20); vwap_reclaim = (df1["close"].iloc[-1] > vwap1.iloc[-1]) and (df1["close"].iloc[-2] <= vwap1.iloc[-2])
-    micro_hh = df1["close"].iloc[-1] > df1["high"].rolling(8).max().iloc[-2]
-    ok_1m = vol_ok_1m and (engulf or reclaim_1m or vwap_reclaim or micro_hh)
+    # 15m 추세 기울기 완만(평탄) 여부
+    ema34_15 = _ema(df15["close"], 34)
+    slope = float(ema34_15.iloc[-1] - ema34_15.iloc[-4]) / (abs(ema34_15.iloc[-4]) + 1e-12)
 
-    # 5m 보조(기존)
-    ema20_5 = _ema(df5["close"], 20)
-    reclaim_5m = (_safe_last(df5["close"]) > _safe_last(ema20_5)) and (df5["close"].iloc[-2] <= ema20_5.iloc[-2])
-    vol_spike_5m = _safe_last(df5["volume"]) > _safe_last(_sma(df5["volume"], 20)) * 1.2
-    ok_5m = reclaim_5m and vol_spike_5m
+    ok = (bbw_ratio <= RANGE_BBW_MAX) and (atr_ratio <= RANGE_ATR_MAX) and (abs(slope) <= SLOPE_EPS)
+    meta = {"bbw_ratio": round(bbw_ratio, 3), "atr_ratio": round(atr_ratio, 3), "slope": round(slope, 5)}
+    return ok, meta
 
-    ok = bool(ok_1m or ok_5m)
-    return ok, {"engulf_1m": int(engulf), "vol_ok_1m": int(vol_ok_1m),
-                "reclaim_1m": int(reclaim_1m), "vwap_1m": int(vwap_reclaim),
-                "micro_hh": int(micro_hh), "reclaim_5m": int(reclaim_5m), "vol_spike_5m": int(vol_spike_5m)}
+def _deviation_setup(df5: pd.DataFrame) -> Tuple[str, Dict[str, Any]]:
+    # VWAP/MA 대비 괴리 체크 + 볼린저 터치/이탈 확인
+    vwap = _vwap(df5, 20)
+    u, ma, l, _ = _bb(df5["close"], 20, 2.0)
 
-def _trigger_short(df5: pd.DataFrame, df1: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
-    ema20_1 = _ema(df1["close"], 20)
-    v1 = df1["volume"]; vol_ok_1m = _safe_last(v1) > _safe_last(_sma(v1, 20))
-    engulf = _bearish_engulfing_1m(df1)
-    reclaim_1m = (df1["close"].iloc[-1] < ema20_1.iloc[-1]) and (df1["close"].iloc[-2] >= ema20_1.iloc[-2])
-    vwap1 = _vwap(df1, 20); vwap_reclaim = (df1["close"].iloc[-1] < vwap1.iloc[-1]) and (df1["close"].iloc[-2] >= vwap1.iloc[-2])
-    micro_ll = df1["close"].iloc[-1] < df1["low"].rolling(8).min().iloc[-2]
-    ok_1m = vol_ok_1m and (engulf or reclaim_1m or vwap_reclaim or micro_ll)
+    px   = _safe_last(df5["close"])
+    vwp  = _safe_last(vwap)
+    base = max(vwp, 1e-12)
+    dev_vwap = (px - vwp) / base
+    dev_ma   = (px - _safe_last(ma)) / (abs(_safe_last(ma)) + 1e-12)
 
-    ema20_5 = _ema(df5["close"], 20)
-    reclaim_5m = (_safe_last(df5["close"]) < _safe_last(ema20_5)) and (df5["close"].iloc[-2] >= ema20_5.iloc[-2])
-    vol_spike_5m = _safe_last(df5["volume"]) > _safe_last(_sma(df5["volume"], 20)) * 1.2
-    ok_5m = reclaim_5m and vol_spike_5m
+    touch_low  = px <= _safe_last(l)
+    touch_up   = px >= _safe_last(u)
+    over_low   = px < _safe_last(l) - 0.25*(_safe_last(u) - _safe_last(l))
+    over_up    = px > _safe_last(u) + 0.25*(_safe_last(u) - _safe_last(l))
 
-    ok = bool(ok_1m or ok_5m)
-    return ok, {"engulf_1m": int(engulf), "vol_ok_1m": int(vol_ok_1m),
-                "reclaim_1m": int(reclaim_1m), "vwap_1m": int(vwap_reclaim),
-                "micro_ll": int(micro_ll), "reclaim_5m": int(reclaim_5m), "vol_spike_5m": int(vol_spike_5m)}
+    # 롱: 하단 과이탈 + 음의 괴리 충분
+    if (dev_vwap <= -VWAP_DEV_MIN or dev_ma <= -MA_DEV_MIN) and (touch_low or over_low):
+        return "LONG", {
+            "dev_vwap": round(float(dev_vwap), 4),
+            "dev_ma": round(float(dev_ma), 4),
+            "band": "lower" if touch_low else "over_lower"
+        }
+    # 숏: 상단 과이탈 + 양의 괴리 충분
+    if (dev_vwap >= VWAP_DEV_MIN or dev_ma >= MA_DEV_MIN) and (touch_up or over_up):
+        return "SHORT", {
+            "dev_vwap": round(float(dev_vwap), 4),
+            "dev_ma": round(float(dev_ma), 4),
+            "band": "upper" if touch_up else "over_upper"
+        }
+    return "NONE", {"dev_vwap": round(float(dev_vwap), 4), "dev_ma": round(float(dev_ma), 4), "band": "none"}
 
-# ---------- 엔트리/리스크 ----------
-def _entry_sl_tp_long(df5: pd.DataFrame) -> Tuple[float, float, float]:
-    price = _safe_last(df5["close"])
-    atr5 = _safe_last(_calc_atr(df5, 14))
-    sw_low = df5["low"].rolling(6).min().iloc[-2] if len(df5) >= 6 else df5["low"].min()
-    sl = float(sw_low - 0.3 * (atr5 if not math.isnan(atr5) else price*0.01))  # ▶ 0.3×ATR_5m
-    r = max(1e-6, price - sl)
-    tp = float(price + 1.8 * r)
-    return price, sl, tp
-
-def _entry_sl_tp_short(df5: pd.DataFrame) -> Tuple[float, float, float]:
-    price = _safe_last(df5["close"])
-    atr5 = _safe_last(_calc_atr(df5, 14))
-    sw_high = df5["high"].rolling(6).max().iloc[-2] if len(df5) >= 6 else df5["high"].max()
-    sl = float(sw_high + 0.3 * (atr5 if not math.isnan(atr5) else price*0.01))
-    r = max(1e-6, sl - price)
-    tp = float(price - 1.8 * r)
-    return price, sl, tp
-
-# ---------- 공개 API ----------
-def _coerce_frames(args, kwargs):
-    if len(args) == 1 and isinstance(args[0], dict):
-        d = args[0]
-        return d.get("30m") or d.get("m30"), d.get("15m") or d.get("m15"), d.get("5m") or d.get("m5"), d.get("1m") or d.get("m1")
-    elif len(args) >= 4:
-        return args[0], args[1], args[2], args[3]
+def _osc_filter(df5: pd.DataFrame, direction_hint: str) -> Tuple[bool, Dict[str, Any]]:
+    rsi = _rsi(df5["close"], 14)
+    r = _safe_last(rsi)
+    if direction_hint == "LONG":
+        ok = (r <= RSI_BUY_MAX)
+    elif direction_hint == "SHORT":
+        ok = (r >= RSI_SELL_MIN)
     else:
-        return kwargs.get("df30"), kwargs.get("df15"), kwargs.get("df5"), kwargs.get("df1")
+        ok = False
+    return ok, {"rsi": round(r, 1)}
 
-def multi_frame_signal(*args, **kwargs) -> Tuple[str, Dict[str, Any]]:
-    df30, df15, df5, df1 = _coerce_frames(args, kwargs)
-    if any(x is None or len(x) < 30 for x in [df30, df15, df5]) or df1 is None or len(df1) < 3:
+def _confirm_1m(df1: pd.DataFrame, direction: str) -> Tuple[bool, Dict[str, Any]]:
+    if len(df1) < ONE_MIN_LOOK + 2:
+        return False, {"reason": "insufficient_1m"}
+
+    vol = df1["volume"]
+    vol_med = float(vol.rolling(ONE_MIN_LOOK).median().iloc[-1])
+    vol_ok = float(vol.iloc[-1]) >= vol_med * ONE_MIN_VOL_K
+
+    o1, c1, h1, l1 = df1["open"].iloc[-1], df1["close"].iloc[-1], df1["high"].iloc[-1], df1["low"].iloc[-1]
+    o2, c2 = df1["open"].iloc[-2], df1["close"].iloc[-2]
+
+    if direction == "LONG":
+        # 직전 음봉 → 현재 양봉 전환 or 직전 고점 상향
+        candle_ok = (c1 > o1 and c2 <= o2) or (c1 > h1)  # 보수적
+    else:
+        # 직전 양봉 → 현재 음봉 전환 or 직전 저점 하향
+        candle_ok = (c1 < o1 and c2 >= o2) or (c1 < l1)
+
+    ok = bool(vol_ok and candle_ok)
+    return ok, {"vol_last_over_med": round(float(vol.iloc[-1] / (vol_med + 1e-12)), 2),
+                "candle": int(candle_ok)}
+
+# =========================
+# 엔트리/리스크
+# =========================
+def _entry_sl_tp(df5: pd.DataFrame, direction: str) -> Tuple[float, float, float]:
+    px = _safe_last(df5["close"])
+    atr5 = _safe_last(_atr(df5, 14))
+    # 스윙 기준점: 직전 6봉 extreme
+    sw_low  = df5["low"].rolling(6).min().iloc[-2] if len(df5) >= 6 else df5["low"].min()
+    sw_high = df5["high"].rolling(6).max().iloc[-2] if len(df5) >= 6 else df5["high"].max()
+
+    if direction == "LONG":
+        sl = float(min(sw_low, px - 0.6 * (atr5 if not math.isnan(atr5) else px*0.01)))
+        r  = max(1e-6, px - sl)
+        tp = float(px + 1.8 * r)    # R:R ≈ 1:1.8
+    else:
+        sl = float(max(sw_high, px + 0.6 * (atr5 if not math.isnan(atr5) else px*0.01)))
+        r  = max(1e-6, sl - px)
+        tp = float(px - 1.8 * r)
+
+    return float(px), float(sl), float(tp)
+
+# =========================
+# 공개 API (analyzer가 호출)
+# =========================
+def multi_frame_signal(df30: pd.DataFrame,
+                       df15: pd.DataFrame,
+                       df5:  pd.DataFrame,
+                       df1:  pd.DataFrame) -> Tuple[str, Dict[str, Any]]:
+    # 데이터 충분성 체크
+    if any(x is None or len(x) < 60 for x in [df15, df5]) or df1 is None or len(df1) < 25:
         return "NONE", {"raw": 0.0, "15m": 0, "5m": 0, "RSI": float("nan"), "VOL": 0, "reason": "insufficient_data"}
 
-    rsi5 = _safe_last(calc_rsi(df5["close"], 14))
+    # 1) 횡보장 필터
+    range_ok, range_meta = _range_regime(df15, df5)
 
-    # LONG
-    tr_up, up_info = _trend_up_30m15m(df30, df15)
-    pb_long, pb_info_l = _pullback_long_5m(df5, df15)
-    tg_long, tg_info_l = _trigger_long(df5, df1)
-    room_long = True  # 공간 체크는 기존처럼 느슨하게
-    raw_long = 0.0
-    if tr_up: raw_long += 1.2 + 0.2*up_info.get("aux", 0)
-    if pb_long: raw_long += 1.0 + 0.3*pb_info_l.get("fib_ok", 0)
-    if tg_long: raw_long += 1.0
-    if room_long: raw_long += 0.3
+    # 2) 괴리/밴드 이탈로 방향 힌트
+    direction_hint, dev_meta = _deviation_setup(df5)
+    if direction_hint == "NONE":
+        return "NONE", {"raw": 0.0, "15m": int(range_ok), "5m": 0, "RSI": float("nan"), "VOL": 0,
+                        "reason": "no_deviation"}
 
-    # SHORT
-    tr_dn, dn_info = _trend_down_30m15m(df30, df15)
-    pb_short, pb_info_s = _pullback_short_5m(df5, df15)
-    tg_short, tg_info_s = _trigger_short(df5, df1)
-    room_short = True
-    raw_short = 0.0
-    if tr_dn: raw_short += 1.2 + 0.2*dn_info.get("aux", 0)
-    if pb_short: raw_short += 1.0 + 0.3*pb_info_s.get("fib_ok", 0)
-    if tg_short: raw_short += 1.0
-    if room_short: raw_short += 0.3
+    # 3) 오실레이터 극단값 필터
+    osc_ok, osc_meta = _osc_filter(df5, direction_hint)
+    if not osc_ok:
+        return "NONE", {"raw": 0.0, "15m": int(range_ok), "5m": 0, "RSI": float(osc_meta.get("rsi", float("nan"))),
+                        "VOL": 0, "reason": "osc_reject"}
 
-    if raw_long > raw_short and raw_long >= 2.0:
-        direction = "LONG"
-        entry, sl, tp = _entry_sl_tp_long(df5)
-        f15 = int(up_info.get("cond_15", 0)); f5 = int(tg_info_l.get("reclaim_1m", 0) or tg_info_l.get("micro_hh", 0))
-        vol_flag = int(tg_info_l.get("vol_ok_1m", 0))
-        raw = float(raw_long); reason = "trend_up & pullback & trigger"
-    elif raw_short > raw_long and raw_short >= 2.0:
-        direction = "SHORT"
-        entry, sl, tp = _entry_sl_tp_short(df5)
-        f15 = int(dn_info.get("cond_15", 0)); f5 = int(tg_info_s.get("reclaim_1m", 0) or tg_info_s.get("micro_ll", 0))
-        vol_flag = int(tg_info_s.get("vol_ok_1m", 0))
-        raw = float(raw_short); reason = "trend_down & pullback & trigger"
-    else:
-        # 약신호(가끔 보고용) — p컷에서 걸러질 것
-        if raw_long >= raw_short:
-            direction = "LONG"; entry, sl, tp = _entry_sl_tp_long(df5)
-            f15 = int(up_info.get("cond_15", 0)); f5 = int(pb_info_l.get("below_ema20_recent", 0)); vol_flag = 0
-            raw = float(raw_long); reason = "weak_long_bias"
-        else:
-            direction = "SHORT"; entry, sl, tp = _entry_sl_tp_short(df5)
-            f15 = int(dn_info.get("cond_15", 0)); f5 = int(pb_info_s.get("above_ema20_recent", 0)); vol_flag = 0
-            raw = float(raw_short); reason = "weak_short_bias"
+    # 4) 1분 확인(반전+볼륨)
+    micro_ok, micro_meta = _confirm_1m(df1, direction_hint)
+    if not micro_ok:
+        return "NONE", {"raw": 0.0, "15m": int(range_ok), "5m": 1, "RSI": float(osc_meta.get("rsi", float("nan"))),
+                        "VOL": 0, "reason": "micro_fail"}
 
-    payload = {"raw": raw, "15m": f15, "5m": f5, "RSI": float(rsi5), "VOL": vol_flag,
-               "entry": float(entry), "sl": float(sl), "tp": float(tp), "reason": reason}
+    # 5) RAW 점수 (p-score는 analyzer에서 sigmoid로 변환/컷)
+    raw = 0.0
+    # 가중치: 횡보장 여부(1.0), 괴리 강도(0.8~1.2), 오실레이터 일치(0.8), 1m 확인(1.0)
+    raw += 1.0 if range_ok else 0.6
+    dev_mag = max(abs(dev_meta.get("dev_vwap", 0)), abs(dev_meta.get("dev_ma", 0)))
+    raw += 0.8 + min(0.4, dev_mag * 20.0)  # dev 1%면 +0.2 보너스
+    raw += 0.8
+    raw += 1.0
+
+    # 엔트리/리스크
+    entry, sl, tp = _entry_sl_tp(df5, direction_hint)
+
+    payload = {
+        "raw": float(round(raw, 2)),
+        "15m": int(range_ok),                  # analyzer에서 cond_15m 자리로 사용
+        "5m":  1,                              # deviation 세팅 성공 표시
+        "RSI": float(osc_meta.get("rsi", float("nan"))),
+        "VOL": int(micro_meta.get("vol_last_over_med", 0) >= 1.0),
+        "entry": float(entry), "sl": float(sl), "tp": float(tp),
+        "reason": f"mean_reversion|band={dev_meta.get('band')}|dev={dev_mag:.3f}",
+        "meta": {"range": range_meta, "dev": dev_meta, "osc": osc_meta, "micro": micro_meta},
+    }
+
+    direction = "LONG" if direction_hint == "LONG" else "SHORT"
+
+    # 텔레메트리(시그니처 차이는 무시)
     try:
-        stats.record("strategy_multi_tf", {"direction": direction, "raw": raw, "f15": f15, "f5": f5,
-                                           "rsi5": payload["RSI"], "vol": vol_flag, "reason": reason})
-    except Exception: pass
+        stats.record("mean_reversion", {"direction": direction, "raw": payload["raw"],
+                                        "rsi": payload["RSI"], "range_ok": range_ok})
+    except Exception:
+        pass
+
     return direction, payload
