@@ -176,3 +176,12 @@ start_background_loop()
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
+if __name__ != "__main__":
+    # gunicorn에서 실행될 때
+    start_background_loop()
+
+if __name__ == "__main__":
+    start_background_loop()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
