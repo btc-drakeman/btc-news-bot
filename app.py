@@ -1,13 +1,15 @@
 import os
 import time
 import threading
+import traceback
 import requests
 from flask import Flask
 
 app = Flask(__name__)
 
-TOKEN = os.environ.get("8656831052:AAEIniFQa5dTA3GTAPMhepC4Y5iHTde4idg")
-CHAT_ID = os.environ.get("7505401062")
+# Render 환경변수 이름과 정확히 맞춰야 함
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 EXCLUDED = {
     "BTC", "ETH", "SOL", "XRP", "DOGE",
@@ -15,30 +17,35 @@ EXCLUDED = {
 }
 
 last_alert_time = {}
+loop_started = False
+
 
 def send_telegram(msg):
     if not TOKEN or not CHAT_ID:
-        print("텔레그램 환경변수 없음")
+        print("텔레그램 환경변수 없음", flush=True)
         return
 
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+
     try:
         r = requests.post(
             url,
             data={"chat_id": CHAT_ID, "text": msg},
             timeout=10
         )
-        print("텔레그램:", r.status_code, r.text)
+        print(f"텔레그램 전송: {r.status_code}", flush=True)
     except Exception as e:
-        print("텔레그램 오류:", e)
+        print(f"텔레그램 오류: {e}", flush=True)
+
 
 def get_spot_symbols():
     url = "https://api.mexc.com/api/v3/exchangeInfo"
-    data = requests.get(url, timeout=10).json()
+    data = requests.get(url, timeout=5).json()
 
     spot_map = {}
-    for s in data["symbols"]:
-        symbol = s["symbol"]
+
+    for s in data.get("symbols", []):
+        symbol = s.get("symbol", "")
 
         if not symbol.endswith("USDT"):
             continue
@@ -55,11 +62,13 @@ def get_spot_symbols():
 
     return spot_map
 
+
 def get_futures_bases():
     url = "https://contract.mexc.com/api/v1/contract/detail"
-    data = requests.get(url, timeout=10).json()
+    data = requests.get(url, timeout=5).json()
 
     futures = set()
+
     for c in data.get("data", []):
         if c.get("quoteCoin") == "USDT" and c.get("settleCoin") == "USDT":
             base = c.get("baseCoin")
@@ -68,17 +77,21 @@ def get_futures_bases():
 
     return futures
 
+
 def get_top_symbols(n=50):
     url = "https://api.mexc.com/api/v3/ticker/24hr"
-    data = requests.get(url, timeout=10).json()
+    data = requests.get(url, timeout=5).json()
+
+    usdt_data = [x for x in data if x.get("symbol", "").endswith("USDT")]
 
     sorted_symbols = sorted(
-        data,
-        key=lambda x: float(x["quoteVolume"]),
+        usdt_data,
+        key=lambda x: float(x.get("quoteVolume", 0)),
         reverse=True
     )
 
     return [x["symbol"] for x in sorted_symbols[:n]]
+
 
 def get_final_symbols():
     spot = get_spot_symbols()
@@ -92,15 +105,18 @@ def get_final_symbols():
 
     return final[:15]
 
+
 def get_kline(symbol):
     url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
-    return requests.get(url, timeout=10).json()
+    return requests.get(url, timeout=5).json()
+
 
 def check_signal(symbol):
     try:
         data = get_kline(symbol)
 
         if not isinstance(data, list) or len(data) < 5:
+            print(f"{symbol} | kline 데이터 부족", flush=True)
             return
 
         volumes = [float(x[5]) for x in data]
@@ -109,14 +125,22 @@ def check_signal(symbol):
         recent_vol = volumes[-1]
         prev_vol = volumes[-2]
         avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
-        price_change = (prices[-1] - prices[-2]) / prices[-2] * 100
+        prev_price = prices[-2]
+        last_price = prices[-1]
 
-        print(f"{symbol} | {price_change:.2f}%")
+        if prev_price <= 0:
+            return
+
+        price_change = (last_price - prev_price) / prev_price * 100
+
+        print(
+            f"{symbol} | {price_change:.2f}% | recent_vol={recent_vol:.2f} | avg_vol={avg_vol:.2f}",
+            flush=True
+        )
 
         if avg_vol <= 0:
             return
 
-        # 필요하면 여기 숫자 튜닝
         is_signal = (
             recent_vol > avg_vol * 2
             and recent_vol > prev_vol
@@ -127,7 +151,10 @@ def check_signal(symbol):
             return
 
         now = time.time()
-        if symbol in last_alert_time and now - last_alert_time[symbol] < 600:
+        cooldown = 600  # 10분 재알림 제한
+
+        if symbol in last_alert_time and (now - last_alert_time[symbol] < cooldown):
+            print(f"{symbol} | 쿨다운 중", flush=True)
             return
 
         last_alert_time[symbol] = now
@@ -136,52 +163,69 @@ def check_signal(symbol):
             f"{symbol} 🚀 급등 감지\n"
             f"1분 변동률: {price_change:.2f}%\n"
             f"최근 거래량: {recent_vol:.2f}\n"
+            f"이전 거래량: {prev_vol:.2f}\n"
             f"평균 거래량: {avg_vol:.2f}"
         )
 
     except Exception as e:
-        print(symbol, "오류:", e)
+        print(f"{symbol} 오류: {e}", flush=True)
+        traceback.print_exc()
+
 
 def detect_loop():
     while True:
-        try:
-            symbols = get_final_symbols()
-            print("최종 감시 종목:", symbols)
+        loop_start = time.time()
 
-            for s in symbols:
-                check_signal(s)
+        try:
+            print("=" * 60, flush=True)
+            print(f"[LOOP START] {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+
+            symbols = get_final_symbols()
+            print(f"최종 감시 종목: {symbols}", flush=True)
+
+            if not symbols:
+                print("감시 종목 없음", flush=True)
+
+            for symbol in symbols:
+                check_signal(symbol)
                 time.sleep(0.2)
 
-            print("한 바퀴 끝 -> 60초 대기")
-            time.sleep(60)
+            elapsed = time.time() - loop_start
+            print(f"[LOOP END] elapsed={elapsed:.1f}s -> 60초 대기", flush=True)
 
         except Exception as e:
-            print("detect_loop 오류:", e)
-            time.sleep(30)
+            print(f"detect_loop 오류: {e}", flush=True)
+            traceback.print_exc()
+
+        time.sleep(60)
+
 
 @app.route("/")
 def home():
     return "bot is running", 200
 
+
 @app.route("/health")
 def health():
     return "ok", 200
 
+
 def start_background_loop():
+    global loop_started
+
+    if loop_started:
+        print("백그라운드 루프 이미 시작됨", flush=True)
+        return
+
+    loop_started = True
     thread = threading.Thread(target=detect_loop, daemon=True)
     thread.start()
+    print("백그라운드 루프 시작 완료", flush=True)
 
+
+# gunicorn / render 환경에서 import될 때 1회만 실행
 start_background_loop()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-if __name__ != "__main__":
-    # gunicorn에서 실행될 때
-    start_background_loop()
-
-if __name__ == "__main__":
-    start_background_loop()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
