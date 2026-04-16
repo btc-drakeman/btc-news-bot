@@ -7,7 +7,7 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# Render 환경변수 이름과 정확히 맞춰야 함
+# Render 환경변수 이름
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -111,6 +111,28 @@ def get_kline(symbol):
     return requests.get(url, timeout=5).json()
 
 
+def check_long_signal(recent_vol, prev_vol, avg_vol, price_change):
+    return (
+        avg_vol > 0
+        and recent_vol > avg_vol * 2
+        and recent_vol > prev_vol
+        and price_change > 0.7
+    )
+
+
+def check_short_signal(recent_vol, prev_vol, avg_vol, price_change):
+    return (
+        avg_vol > 0
+        and recent_vol > avg_vol * 2
+        and recent_vol > prev_vol
+        and price_change < -0.7
+    )
+
+
+def get_cooldown_key(symbol, side):
+    return f"{symbol}_{side}"
+
+
 def check_signal(symbol):
     try:
         data = get_kline(symbol)
@@ -125,6 +147,7 @@ def check_signal(symbol):
         recent_vol = volumes[-1]
         prev_vol = volumes[-2]
         avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
+
         prev_price = prices[-2]
         last_price = prices[-1]
 
@@ -138,34 +161,47 @@ def check_signal(symbol):
             flush=True
         )
 
-        if avg_vol <= 0:
-            return
+        is_long = check_long_signal(recent_vol, prev_vol, avg_vol, price_change)
+        is_short = check_short_signal(recent_vol, prev_vol, avg_vol, price_change)
 
-        is_signal = (
-            recent_vol > avg_vol * 2
-            and recent_vol > prev_vol
-            and price_change > 0.7
-        )
-
-        if not is_signal:
+        if not is_long and not is_short:
             return
 
         now = time.time()
         cooldown = 600  # 10분 재알림 제한
 
-        if symbol in last_alert_time and (now - last_alert_time[symbol] < cooldown):
-            print(f"{symbol} | 쿨다운 중", flush=True)
+        if is_long:
+            key = get_cooldown_key(symbol, "LONG")
+            if key in last_alert_time and (now - last_alert_time[key] < cooldown):
+                print(f"{symbol} | LONG 쿨다운 중", flush=True)
+                return
+
+            last_alert_time[key] = now
+
+            send_telegram(
+                f"{symbol} 🚀 LONG 신호\n"
+                f"1분 변동률: {price_change:.2f}%\n"
+                f"최근 거래량: {recent_vol:.2f}\n"
+                f"이전 거래량: {prev_vol:.2f}\n"
+                f"평균 거래량: {avg_vol:.2f}"
+            )
             return
 
-        last_alert_time[symbol] = now
+        if is_short:
+            key = get_cooldown_key(symbol, "SHORT")
+            if key in last_alert_time and (now - last_alert_time[key] < cooldown):
+                print(f"{symbol} | SHORT 쿨다운 중", flush=True)
+                return
 
-        send_telegram(
-            f"{symbol} 🚀 급등 감지\n"
-            f"1분 변동률: {price_change:.2f}%\n"
-            f"최근 거래량: {recent_vol:.2f}\n"
-            f"이전 거래량: {prev_vol:.2f}\n"
-            f"평균 거래량: {avg_vol:.2f}"
-        )
+            last_alert_time[key] = now
+
+            send_telegram(
+                f"{symbol} 🔻 SHORT 신호\n"
+                f"1분 변동률: {price_change:.2f}%\n"
+                f"최근 거래량: {recent_vol:.2f}\n"
+                f"이전 거래량: {prev_vol:.2f}\n"
+                f"평균 거래량: {avg_vol:.2f}"
+            )
 
     except Exception as e:
         print(f"{symbol} 오류: {e}", flush=True)
@@ -223,7 +259,6 @@ def start_background_loop():
     print("백그라운드 루프 시작 완료", flush=True)
 
 
-# gunicorn / render 환경에서 import될 때 1회만 실행
 start_background_loop()
 
 if __name__ == "__main__":
