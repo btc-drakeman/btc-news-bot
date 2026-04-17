@@ -508,7 +508,7 @@ def print_seed_outflow_details(rows: List[dict], top: int = 20) -> None:
     for row in rows[:top]:
         print(
             f"{row['time_utc']} | "
-            f"seed={row['seed_short']} -> to={row['to_short']} | "
+            f"seed={row['seed']} -> to={row['to_addr']} | "
             f"token={row['token_symbol']} | amount={row['amount']} | "
             f"hub={row['is_hub_candidate'] or '-'} | "
             f"exchange={row['hub_exchange_hits'] or '-'}"
