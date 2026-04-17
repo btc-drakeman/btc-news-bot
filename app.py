@@ -19,6 +19,8 @@ EXCLUDED = {
 
 last_alert_time = {}
 loop_started = False
+last_onchain_time = 0
+ONCHAIN_INTERVAL = 900  # 15분
 
 
 def send_telegram(msg):
@@ -209,12 +211,20 @@ def check_signal(symbol):
 
 
 def detect_loop():
+    global last_onchain_time
+
     while True:
         loop_start = time.time()
 
         try:
             print("=" * 60, flush=True)
             print(f"[LOOP START] {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+
+            now = time.time()
+            if now - last_onchain_time >= ONCHAIN_INTERVAL:
+                print("[ONCHAIN] 주기 실행 조건 충족", flush=True)
+                run_onchain()
+                last_onchain_time = now
 
             symbols = get_final_symbols()
             print(f"최종 감시 종목: {symbols}", flush=True)
@@ -237,24 +247,52 @@ def detect_loop():
 
 def run_onchain():
     print("[ONCHAIN] 시작", flush=True)
+
     try:
-        result = subprocess.run(
+        # 🔵 ETH
+        print("[ONCHAIN] ETH 분석 시작", flush=True)
+        eth = subprocess.run(
             [
                 "python",
                 "eth_repeat_wallet_mvp.py",
                 "--seeds",
                 "seed_addresses.txt",
+                "--chainid",
+                "1",
                 "--days",
                 "30"
             ],
             capture_output=True,
             text=True
         )
-        print(result.stdout, flush=True)
-        print(result.stderr, flush=True)
-        print(f"[ONCHAIN] 종료 code={result.returncode}", flush=True)
+        print(eth.stdout, flush=True)
+        print(eth.stderr, flush=True)
+        print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
+
+        # 🟡 BSC
+        print("[ONCHAIN] BSC 분석 시작", flush=True)
+        bsc = subprocess.run(
+            [
+                "python",
+                "eth_repeat_wallet_mvp.py",
+                "--seeds",
+                "seed_addresses.txt",
+                "--chainid",
+                "56",
+                "--days",
+                "30"
+            ],
+            capture_output=True,
+            text=True
+        )
+        print(bsc.stdout, flush=True)
+        print(bsc.stderr, flush=True)
+        print(f"[ONCHAIN][BSC] code={bsc.returncode}", flush=True)
+
+        print("[ONCHAIN] 종료", flush=True)
+
     except Exception as e:
-        print(f"[ONCHAIN] 실행 오류: {e}", flush=True)
+        print(f"[ONCHAIN] 오류: {e}", flush=True)
         traceback.print_exc()
 
 @app.route("/")
@@ -281,7 +319,6 @@ def start_background_loop():
 
 
 start_background_loop()
-run_onchain()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
