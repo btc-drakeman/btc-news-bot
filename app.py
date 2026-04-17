@@ -4,6 +4,7 @@ import threading
 import traceback
 import requests
 from flask import Flask
+import subprocess
 
 app = Flask(__name__)
 
@@ -37,6 +38,15 @@ def send_telegram(msg):
     except Exception as e:
         print(f"텔레그램 오류: {e}", flush=True)
 
+def run_onchain():
+    subprocess.run([
+        "python",
+        "eth_repeat_wallet_mvp.py",
+        "--seeds",
+        "seed_addresses.txt",
+        "--days",
+        "30"
+    ])
 
 def get_spot_symbols():
     url = "https://api.mexc.com/api/v3/exchangeInfo"
@@ -262,5 +272,6 @@ def start_background_loop():
 start_background_loop()
 
 if __name__ == "__main__":
+    run_onchain()  # 먼저 실행
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
