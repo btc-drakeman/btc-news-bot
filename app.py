@@ -38,16 +38,6 @@ def send_telegram(msg):
     except Exception as e:
         print(f"텔레그램 오류: {e}", flush=True)
 
-def run_onchain():
-    subprocess.run([
-        "python",
-        "eth_repeat_wallet_mvp.py",
-        "--seeds",
-        "seed_addresses.txt",
-        "--days",
-        "30"
-    ])
-
 def get_spot_symbols():
     url = "https://api.mexc.com/api/v3/exchangeInfo"
     data = requests.get(url, timeout=5).json()
@@ -245,6 +235,27 @@ def detect_loop():
 
         time.sleep(60)
 
+def run_onchain():
+    print("[ONCHAIN] 시작", flush=True)
+    try:
+        result = subprocess.run(
+            [
+                "python",
+                "eth_repeat_wallet_mvp.py",
+                "--seeds",
+                "seed_addresses.txt",
+                "--days",
+                "30"
+            ],
+            capture_output=True,
+            text=True
+        )
+        print(result.stdout, flush=True)
+        print(result.stderr, flush=True)
+        print(f"[ONCHAIN] 종료 code={result.returncode}", flush=True)
+    except Exception as e:
+        print(f"[ONCHAIN] 실행 오류: {e}", flush=True)
+        traceback.print_exc()
 
 @app.route("/")
 def home():
@@ -270,8 +281,8 @@ def start_background_loop():
 
 
 start_background_loop()
+run_onchain()
 
 if __name__ == "__main__":
-    run_onchain()  # 먼저 실행
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
