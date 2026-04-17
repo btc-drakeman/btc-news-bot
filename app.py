@@ -23,11 +23,27 @@ last_alert_time: Dict[str, float] = {}
 spot_loop_started = False
 onchain_loop_started = False
 
-SIGNAL_INTERVAL = 60       # 시세 감지: 1분
-ONCHAIN_INTERVAL = 600     # 온체인: 10분
-SIGNAL_COOLDOWN = 600      # 일반 시세 알림 재알림 제한
-ONCHAIN_CHART_COOLDOWN = 900  # 온체인-차트 결합 알림 재알림 제한
+SIGNAL_INTERVAL = 60            # 1분마다 체크하되, 판단은 5분/15분봉 기준
+ONCHAIN_INTERVAL = 600          # 온체인: 10분
+SIGNAL_COOLDOWN = 1800          # 일반 시세 알림 재알림 제한 (30분)
+ONCHAIN_CHART_COOLDOWN = 1800   # 온체인-차트 결합 알림 재알림 제한 (30분)
+OPPOSITE_SIDE_LOCK = 900        # 반대 방향 금지 시간 (15분)
 ONCHAIN_DETAIL_CSV = "seed_outflows_hub_candidates.csv"
+
+SIGNAL_INTERVAL_5M = "5m"
+TREND_INTERVAL_15M = "15m"
+
+# 20배 기준으로 너무 잦은 신호를 줄인 값
+FIVE_MIN_VOL_MULTIPLIER = 2.5   # 최근 2개 5분봉 거래량이 평균의 2.5배 이상
+FIVE_MIN_MIN_CHANGE = 0.35      # 각 5분봉 최소 변동률(%)
+FIVE_MIN_TOTAL_CHANGE = 0.90    # 최근 2개 5분봉 누적 변동률(%)
+
+# 휩쏘(가짜 돌파/긴 꼬리) 필터
+MIN_BODY_RATIO = 0.45           # 몸통이 전체 레인지의 45% 이상
+MAX_OPPOSITE_WICK_RATIO = 0.35  # 반대 꼬리가 전체 레인지의 35% 이하
+MAX_SAME_WICK_RATIO = 0.40      # 진행 방향 꼬리도 과도하면 제외
+MIN_CLOSE_POSITION = 0.60       # LONG이면 종가가 봉 상단 60% 이상 / SHORT이면 하단 40% 이하
+MAX_RANGE_PCT = 3.50            # 단일 5분봉 레인지가 너무 크면 과열로 제외
 
 
 def send_telegram(msg: str) -> None:
@@ -113,63 +129,206 @@ def get_final_symbols() -> List[str]:
     return final[:15]
 
 
-def get_kline(symbol: str):
-    url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
+def get_kline(symbol: str, interval: str = "5m", limit: int = 40):
+    url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     return requests.get(url, timeout=10).json()
-
-
-def check_long_signal(recent_vol: float, prev_vol: float, avg_vol: float, price_change: float) -> bool:
-    return (
-        avg_vol > 0
-        and recent_vol > avg_vol * 1.5
-        and recent_vol > prev_vol
-        and price_change > 0.4
-    )
-
-
-def check_short_signal(recent_vol: float, prev_vol: float, avg_vol: float, price_change: float) -> bool:
-    return (
-        avg_vol > 0
-        and recent_vol > avg_vol * 1.5
-        and recent_vol > prev_vol
-        and price_change < -0.4
-    )
 
 
 def get_cooldown_key(symbol: str, side: str, prefix: str = "signal") -> str:
     return f"{prefix}:{symbol}:{side}"
 
 
+def get_opposite_side(side: str) -> str:
+    return "SHORT" if side == "LONG" else "LONG"
+
+
+def is_opposite_direction_locked(symbol: str, side: str, prefix: str) -> bool:
+    opposite_key = get_cooldown_key(symbol, get_opposite_side(side), prefix=prefix)
+    opposite_time = last_alert_time.get(opposite_key)
+    if opposite_time is None:
+        return False
+    return (time.time() - opposite_time) < OPPOSITE_SIDE_LOCK
+
+
+def get_trend_direction_15m(closes: List[float]) -> str:
+    if len(closes) < 4:
+        return "NONE"
+
+    c1 = closes[-2]
+    c2 = closes[-3]
+    c3 = closes[-4]
+
+    if c1 > c2 > c3:
+        return "LONG"
+    if c1 < c2 < c3:
+        return "SHORT"
+    return "NONE"
+
+
+def build_candle(row: list) -> Optional[dict]:
+    try:
+        o = float(row[1])
+        h = float(row[2])
+        l = float(row[3])
+        c = float(row[4])
+        v = float(row[5])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+    if min(o, h, l, c) <= 0:
+        return None
+
+    candle_range = max(h - l, 1e-12)
+    body = abs(c - o)
+    upper_wick = max(h - max(o, c), 0.0)
+    lower_wick = max(min(o, c) - l, 0.0)
+    change_pct = (c - o) / o * 100
+    range_pct = (h - l) / l * 100 if l > 0 else 0.0
+    body_ratio = body / candle_range
+    close_pos = (c - l) / candle_range
+
+    return {
+        "open": o,
+        "high": h,
+        "low": l,
+        "close": c,
+        "volume": v,
+        "range": candle_range,
+        "body": body,
+        "upper_wick": upper_wick,
+        "lower_wick": lower_wick,
+        "change_pct": change_pct,
+        "range_pct": range_pct,
+        "body_ratio": body_ratio,
+        "close_pos": close_pos,
+    }
+
+
+def is_valid_trend_candle(candle: dict, side: str) -> bool:
+    if candle["range_pct"] > MAX_RANGE_PCT:
+        return False
+    if candle["body_ratio"] < MIN_BODY_RATIO:
+        return False
+
+    if side == "LONG":
+        if candle["change_pct"] <= 0:
+            return False
+        if (candle["lower_wick"] / candle["range"]) > MAX_OPPOSITE_WICK_RATIO:
+            return False
+        if (candle["upper_wick"] / candle["range"]) > MAX_SAME_WICK_RATIO:
+            return False
+        if candle["close_pos"] < MIN_CLOSE_POSITION:
+            return False
+        return True
+
+    if side == "SHORT":
+        if candle["change_pct"] >= 0:
+            return False
+        if (candle["upper_wick"] / candle["range"]) > MAX_OPPOSITE_WICK_RATIO:
+            return False
+        if (candle["lower_wick"] / candle["range"]) > MAX_SAME_WICK_RATIO:
+            return False
+        if candle["close_pos"] > (1 - MIN_CLOSE_POSITION):
+            return False
+        return True
+
+    return False
+
+
+def check_long_signal(
+    recent_candle: dict,
+    prev_candle: dict,
+    avg_vol: float,
+    trend_direction: str,
+) -> bool:
+    recent_vol = recent_candle["volume"]
+    prev_vol = prev_candle["volume"]
+    recent_change = recent_candle["change_pct"]
+    prev_change = prev_candle["change_pct"]
+    total_change = recent_change + prev_change
+
+    return (
+        avg_vol > 0
+        and trend_direction == "LONG"
+        and recent_vol > avg_vol * FIVE_MIN_VOL_MULTIPLIER
+        and prev_vol > avg_vol * FIVE_MIN_VOL_MULTIPLIER
+        and recent_vol >= prev_vol * 0.85
+        and recent_change > FIVE_MIN_MIN_CHANGE
+        and prev_change > FIVE_MIN_MIN_CHANGE
+        and total_change > FIVE_MIN_TOTAL_CHANGE
+        and is_valid_trend_candle(recent_candle, "LONG")
+        and is_valid_trend_candle(prev_candle, "LONG")
+    )
+
+
+def check_short_signal(
+    recent_candle: dict,
+    prev_candle: dict,
+    avg_vol: float,
+    trend_direction: str,
+) -> bool:
+    recent_vol = recent_candle["volume"]
+    prev_vol = prev_candle["volume"]
+    recent_change = recent_candle["change_pct"]
+    prev_change = prev_candle["change_pct"]
+    total_change = recent_change + prev_change
+
+    return (
+        avg_vol > 0
+        and trend_direction == "SHORT"
+        and recent_vol > avg_vol * FIVE_MIN_VOL_MULTIPLIER
+        and prev_vol > avg_vol * FIVE_MIN_VOL_MULTIPLIER
+        and recent_vol >= prev_vol * 0.85
+        and recent_change < -FIVE_MIN_MIN_CHANGE
+        and prev_change < -FIVE_MIN_MIN_CHANGE
+        and total_change < -FIVE_MIN_TOTAL_CHANGE
+        and is_valid_trend_candle(recent_candle, "SHORT")
+        and is_valid_trend_candle(prev_candle, "SHORT")
+    )
+
+
 def analyze_symbol(symbol: str) -> Optional[dict]:
-    data = get_kline(symbol)
-    if not isinstance(data, list) or len(data) < 15:
+    data_5m = get_kline(symbol, interval=SIGNAL_INTERVAL_5M, limit=40)
+    data_15m = get_kline(symbol, interval=TREND_INTERVAL_15M, limit=20)
+
+    if not isinstance(data_5m, list) or len(data_5m) < 16:
+        return None
+    if not isinstance(data_15m, list) or len(data_15m) < 6:
         return None
 
-    volumes = [float(x[5]) for x in data]
-    prices = [float(x[4]) for x in data]
-
-    # 완성된 1분봉 기준
-    recent_vol = volumes[-2]
-    prev_vol = volumes[-3]
-    recent_price = prices[-2]
-    prev_price = prices[-3]
-
-    avg_window = volumes[-13:-3]
-    if not avg_window or prev_price <= 0:
+    recent_candle = build_candle(data_5m[-2])
+    prev_candle = build_candle(data_5m[-3])
+    if not recent_candle or not prev_candle:
         return None
 
+    closes_15m = [float(x[4]) for x in data_15m]
+    volumes_5m = [float(x[5]) for x in data_5m]
+    avg_window = volumes_5m[-14:-4]
+    if not avg_window:
+        return None
     avg_vol = sum(avg_window) / len(avg_window)
-    price_change = (recent_price - prev_price) / prev_price * 100
 
-    is_long = check_long_signal(recent_vol, prev_vol, avg_vol, price_change)
-    is_short = check_short_signal(recent_vol, prev_vol, avg_vol, price_change)
+    trend_direction = get_trend_direction_15m(closes_15m)
+    is_long = check_long_signal(recent_candle, prev_candle, avg_vol, trend_direction)
+    is_short = check_short_signal(recent_candle, prev_candle, avg_vol, trend_direction)
+
+    total_change = recent_candle["change_pct"] + prev_candle["change_pct"]
 
     return {
         "symbol": symbol,
-        "price_change": price_change,
-        "recent_vol": recent_vol,
-        "prev_vol": prev_vol,
+        "trend_direction": trend_direction,
+        "recent_change": recent_candle["change_pct"],
+        "prev_change": prev_candle["change_pct"],
+        "total_change": total_change,
+        "recent_vol": recent_candle["volume"],
+        "prev_vol": prev_candle["volume"],
         "avg_vol": avg_vol,
+        "recent_body_ratio": recent_candle["body_ratio"],
+        "prev_body_ratio": prev_candle["body_ratio"],
+        "recent_close_pos": recent_candle["close_pos"],
+        "prev_close_pos": prev_candle["close_pos"],
+        "recent_range_pct": recent_candle["range_pct"],
+        "prev_range_pct": prev_candle["range_pct"],
         "is_long": is_long,
         "is_short": is_short,
     }
@@ -184,14 +343,21 @@ def send_signal_alert(analysis: dict) -> None:
         if key in last_alert_time and (now - last_alert_time[key] < SIGNAL_COOLDOWN):
             print(f"{symbol} | LONG 쿨다운 중", flush=True)
             return
+        if is_opposite_direction_locked(symbol, "LONG", prefix="signal"):
+            print(f"{symbol} | SHORT 알림 직후라 LONG 잠금", flush=True)
+            return
 
         last_alert_time[key] = now
         send_telegram(
             f"{symbol} 🚀 LONG 신호\n"
-            f"확정 1분 변동률: {analysis['price_change']:.2f}%\n"
+            f"15분 방향: {analysis['trend_direction']}\n"
+            f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
+            f"이전 5분 변동률: {analysis['prev_change']:.2f}%\n"
+            f"최근 2개 5분 누적: {analysis['total_change']:.2f}%\n"
             f"최근 거래량: {analysis['recent_vol']:.2f}\n"
             f"이전 거래량: {analysis['prev_vol']:.2f}\n"
-            f"평균 거래량: {analysis['avg_vol']:.2f}"
+            f"평균 거래량: {analysis['avg_vol']:.2f}\n"
+            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
         )
         return
 
@@ -200,14 +366,21 @@ def send_signal_alert(analysis: dict) -> None:
         if key in last_alert_time and (now - last_alert_time[key] < SIGNAL_COOLDOWN):
             print(f"{symbol} | SHORT 쿨다운 중", flush=True)
             return
+        if is_opposite_direction_locked(symbol, "SHORT", prefix="signal"):
+            print(f"{symbol} | LONG 알림 직후라 SHORT 잠금", flush=True)
+            return
 
         last_alert_time[key] = now
         send_telegram(
             f"{symbol} 🔻 SHORT 신호\n"
-            f"확정 1분 변동률: {analysis['price_change']:.2f}%\n"
+            f"15분 방향: {analysis['trend_direction']}\n"
+            f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
+            f"이전 5분 변동률: {analysis['prev_change']:.2f}%\n"
+            f"최근 2개 5분 누적: {analysis['total_change']:.2f}%\n"
             f"최근 거래량: {analysis['recent_vol']:.2f}\n"
             f"이전 거래량: {analysis['prev_vol']:.2f}\n"
-            f"평균 거래량: {analysis['avg_vol']:.2f}"
+            f"평균 거래량: {analysis['avg_vol']:.2f}\n"
+            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
         )
 
 
@@ -219,9 +392,13 @@ def check_signal(symbol: str) -> None:
             return
 
         print(
-            f"[SIGNAL] {symbol} | chg={analysis['price_change']:.2f}% | "
+            f"[SIGNAL] {symbol} | trend={analysis['trend_direction']} | "
+            f"chg1={analysis['recent_change']:.2f}% | "
+            f"chg2={analysis['prev_change']:.2f}% | "
+            f"chg_total={analysis['total_change']:.2f}% | "
             f"recent_vol={analysis['recent_vol']:.2f} | "
-            f"prev_vol={analysis['prev_vol']:.2f} | avg_vol={analysis['avg_vol']:.2f}",
+            f"prev_vol={analysis['prev_vol']:.2f} | avg_vol={analysis['avg_vol']:.2f} | "
+            f"body1={analysis['recent_body_ratio']:.2f} | body2={analysis['prev_body_ratio']:.2f}",
             flush=True,
         )
         print(
@@ -319,7 +496,8 @@ def analyze_onchain_chart_candidates() -> None:
             print(
                 f"[ONCHAIN-CHART] {symbol} | from_onchain token={token_symbol} | "
                 f"hub={is_hub} | exchange={exchange_hits} | "
-                f"chg={analysis['price_change']:.2f}% | "
+                f"trend={analysis['trend_direction']} | "
+                f"chg_total={analysis['total_change']:.2f}% | "
                 f"recent_vol={analysis['recent_vol']:.2f} | avg_vol={analysis['avg_vol']:.2f}",
                 flush=True,
             )
@@ -332,6 +510,9 @@ def analyze_onchain_chart_candidates() -> None:
             now = time.time()
             if key in last_alert_time and (now - last_alert_time[key] < ONCHAIN_CHART_COOLDOWN):
                 print(f"[ONCHAIN-CHART] {symbol} {side} 쿨다운 중", flush=True)
+                continue
+            if is_opposite_direction_locked(symbol, side, prefix="onchain_chart"):
+                print(f"[ONCHAIN-CHART] {symbol} 반대 방향 잠금 중", flush=True)
                 continue
             last_alert_time[key] = now
 
@@ -346,9 +527,11 @@ def analyze_onchain_chart_candidates() -> None:
                 f"amount: {amount}\n"
                 f"hub: {'Y' if is_hub else '-'} / shared: {shared}\n"
                 f"exchange: {exchange_hits}\n"
-                f"확정 1분 변동률: {analysis['price_change']:.2f}%\n"
+                f"15분 방향: {analysis['trend_direction']}\n"
+                f"최근 2개 5분 누적: {analysis['total_change']:.2f}%\n"
                 f"최근 거래량: {analysis['recent_vol']:.2f}\n"
-                f"평균 거래량: {analysis['avg_vol']:.2f}"
+                f"평균 거래량: {analysis['avg_vol']:.2f}\n"
+                f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
             )
 
     except Exception as e:
