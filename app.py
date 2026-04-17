@@ -20,7 +20,7 @@ EXCLUDED = {
 last_alert_time = {}
 loop_started = False
 last_onchain_time = 0
-ONCHAIN_INTERVAL = 900  # 15분
+ONCHAIN_INTERVAL = 600  # 10분
 
 
 def send_telegram(msg):
@@ -249,7 +249,6 @@ def run_onchain():
     print("[ONCHAIN] 시작", flush=True)
 
     try:
-        # 🔵 ETH
         print("[ONCHAIN] ETH 분석 시작", flush=True)
         eth = subprocess.run(
             [
@@ -268,26 +267,6 @@ def run_onchain():
         print(eth.stdout, flush=True)
         print(eth.stderr, flush=True)
         print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
-
-        # 🟡 BSC
-        print("[ONCHAIN] BSC 분석 시작", flush=True)
-        bsc = subprocess.run(
-            [
-                "python",
-                "eth_repeat_wallet_mvp.py",
-                "--seeds",
-                "seed_addresses.txt",
-                "--chainid",
-                "56",
-                "--days",
-                "30"
-            ],
-            capture_output=True,
-            text=True
-        )
-        print(bsc.stdout, flush=True)
-        print(bsc.stderr, flush=True)
-        print(f"[ONCHAIN][BSC] code={bsc.returncode}", flush=True)
 
         print("[ONCHAIN] 종료", flush=True)
 

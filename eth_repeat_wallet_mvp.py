@@ -7,19 +7,9 @@ Etherscan V2 기반 반복 지갑(허브 후보) 탐지 MVP
 - 최근 ERC-20 전송 내역을 수집하고
 - 공통 상대 주소를 집계한 뒤
 - 허브 후보 점수를 계산합니다.
+- 허브 후보가 대표 거래소 주소로 전송한 흔적이 있으면 exchange_hits로 표시합니다.
 
 기본 체인: Ethereum Mainnet (chainid=1)
-나중에 BSC 등 EVM 체인은 chainid만 바꿔 확장 가능
-
-필수 준비
-1) Etherscan API Key 발급
-2) seed_addresses.txt 파일 준비 (한 줄에 주소 1개)
-3) 환경변수 ETHERSCAN_API_KEY 설정
-   - mac/linux: export ETHERSCAN_API_KEY=YOUR_KEY
-   - windows powershell: setx ETHERSCAN_API_KEY "YOUR_KEY"
-
-실행 예시
-python eth_repeat_wallet_mvp.py --seeds seed_addresses_example.txt --days 30 --offset 100 --top 20
 """
 
 from __future__ import annotations
@@ -29,11 +19,10 @@ import collections
 import csv
 import os
 import sqlite3
-import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, Iterable, List
 
 import requests
 
@@ -41,11 +30,29 @@ import requests
 API_URL = "https://api.etherscan.io/v2/api"
 DB_PATH = "repeat_wallets.db"
 
+# 대표 거래소 핫월렛/입금 주소 일부
+# 완전한 목록은 아니며, 강한 신호를 잡는 1차 필터 용도
+EXCHANGE_WALLETS = {
+    # Binance
+    "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be": "BINANCE",
+    "0xd551234ae421e3bcba99a0da6d736074f22192ff": "BINANCE",
+    "0x564286362092d8e7936f0549571a803b203aaced": "BINANCE",
+    "0x0681d8db095565fe8a346fa0277bffde9c0edbbf": "BINANCE",
+    # OKX
+    "0x1ab4971b1a5d0b22c1ff6d69b6b437f93d1b6f54": "OKX",
+    "0x4e9ce36e442e55ecd9025b9a6e0d88485d628a67": "OKX",
+    # Coinbase
+    "0x503828976d22510aad0201ac7ec88293211d23da": "COINBASE",
+    "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740": "COINBASE",
+    # Bybit
+    "0xf89d7b9c864f589bbf53a82105107622b35eaa40": "BYBIT",
+}
+
 
 @dataclass
 class Transfer:
     chainid: str
-    wallet: str          # 조회 기준 시드 주소
+    wallet: str
     block_number: int
     timestamp: int
     tx_hash: str
@@ -69,7 +76,7 @@ def utc_now_ts() -> int:
 def ensure_db(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
-        """
+        '''
         CREATE TABLE IF NOT EXISTS transfers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             chainid TEXT NOT NULL,
@@ -86,31 +93,22 @@ def ensure_db(conn: sqlite3.Connection) -> None:
             token_decimal INTEGER,
             UNIQUE(chainid, wallet, tx_hash, from_addr, to_addr, contract_address, value_raw)
         )
-        """
+        '''
     )
     cur.execute(
-        """
+        '''
         CREATE TABLE IF NOT EXISTS exchange_labels (
             address TEXT PRIMARY KEY,
             label TEXT NOT NULL
         )
-        """
+        '''
     )
     conn.commit()
 
 
 def seed_exchange_labels(conn: sqlite3.Connection) -> None:
-    """
-    수동 라벨용 샘플.
-    실제로는 네가 알고 있는 거래소/입금 주소를 계속 추가해가면 좋다.
-    """
-    labels = [
-        # 형식 예시:
-        # ("0x1234....", "Binance"),
-        # ("0xabcd....", "OKX"),
-    ]
     cur = conn.cursor()
-    for address, label in labels:
+    for address, label in EXCHANGE_WALLETS.items():
         cur.execute(
             "INSERT OR IGNORE INTO exchange_labels (address, label) VALUES (?, ?)",
             (normalize(address), label),
@@ -121,14 +119,18 @@ def seed_exchange_labels(conn: sqlite3.Connection) -> None:
 def read_seed_addresses(path: str) -> List[str]:
     seeds = []
     with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = normalize(line)
+        for raw_line in f:
+            line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
-            seeds.append(line)
+            if "#" in line:
+                line = line.split("#", 1)[0].strip()
+            line = normalize(line)
+            if line:
+                seeds.append(line)
     if not seeds:
         raise ValueError("시드 주소가 없습니다. seed 파일을 확인하세요.")
-    return list(dict.fromkeys(seeds))  # 중복 제거, 순서 유지
+    return list(dict.fromkeys(seeds))
 
 
 def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
@@ -143,18 +145,14 @@ def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
     resp.raise_for_status()
     data = resp.json()
 
-    # Etherscan은 에러여도 200으로 오는 경우가 많음
     status = str(data.get("status", ""))
     message = str(data.get("message", ""))
     result = data.get("result")
 
     if status == "0":
         text = str(result)
-        # 빈 결과는 정상 취급
         if "No transactions found" in text:
             return {"status": "1", "message": "OK", "result": []}
-
-        # rate limit 등은 호출측에서 재시도 가능하게 예외
         raise RuntimeError(f"Etherscan error: message={message} result={result}")
 
     return data
@@ -211,12 +209,12 @@ def save_transfers(conn: sqlite3.Connection, transfers: Iterable[Transfer]) -> i
     count = 0
     for t in transfers:
         cur.execute(
-            """
+            '''
             INSERT OR IGNORE INTO transfers
             (chainid, wallet, block_number, timestamp, tx_hash, from_addr, to_addr,
              token_symbol, token_name, contract_address, value_raw, token_decimal)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            ''',
             (
                 t.chainid,
                 t.wallet,
@@ -246,11 +244,6 @@ def collect_for_seed(
     max_pages: int,
     sleep_sec: float,
 ) -> int:
-    """
-    시드 주소 1개에 대해 최근 ERC20 전송 수집
-    - Etherscan의 tokentx는 정확한 시간 필터를 직접 주지 못하므로
-      최신순으로 페이지를 보면서 cutoff 이전이면 중단
-    """
     cutoff = utc_now_ts() - days * 86400
     total_saved = 0
 
@@ -275,7 +268,6 @@ def collect_for_seed(
             saved = save_transfers(conn, recent)
             total_saved += saved
 
-        # 가장 오래된 tx가 cutoff보다 이전이면 종료
         oldest_ts = min(t.timestamp for t in transfers)
         if oldest_ts < cutoff:
             break
@@ -285,34 +277,54 @@ def collect_for_seed(
     return total_saved
 
 
+def find_exchange_hits(
+    conn: sqlite3.Connection,
+    candidate_addresses: List[str],
+    chainid: str,
+    days: int,
+) -> Dict[str, List[str]]:
+    cutoff = utc_now_ts() - days * 86400
+    cur = conn.cursor()
+    hits: Dict[str, List[str]] = collections.defaultdict(list)
+
+    for addr in candidate_addresses:
+        rows = cur.execute(
+            '''
+            SELECT DISTINCT to_addr
+            FROM transfers
+            WHERE chainid = ?
+              AND timestamp >= ?
+              AND from_addr = ?
+            ''',
+            (chainid, cutoff, normalize(addr)),
+        ).fetchall()
+
+        for (to_addr,) in rows:
+            to_addr = normalize(to_addr)
+            if to_addr in EXCHANGE_WALLETS:
+                hits[normalize(addr)].append(EXCHANGE_WALLETS[to_addr])
+
+    return hits
+
+
 def build_hub_scores(
     conn: sqlite3.Connection,
     chainid: str,
     days: int,
     min_shared_seed_count: int = 2,
 ) -> List[dict]:
-    """
-    반복 등장 허브 후보 점수 계산
-
-    규칙(단순 MVP)
-    - 시드 여러 개와 연결된 상대 주소일수록 점수 ↑
-    - 거래소 라벨이 있으면 별도 표시
-    - in/out 방향 다양성 있으면 점수 약간 ↑
-    """
     cutoff = utc_now_ts() - days * 86400
     cur = conn.cursor()
 
     rows = cur.execute(
-        """
+        '''
         SELECT wallet, from_addr, to_addr, timestamp, token_symbol, contract_address
         FROM transfers
         WHERE chainid = ? AND timestamp >= ?
-        """,
+        ''',
         (chainid, cutoff),
     ).fetchall()
 
-    # 상대 주소별 집계
-    # target 상대 주소가 각 seed와 몇 번 연결됐는지
     per_counterparty_seed_count: Dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     direction_counts: Dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
     token_set: Dict[str, set] = collections.defaultdict(set)
@@ -329,7 +341,6 @@ def build_hub_scores(
             cp = from_addr
             direction_counts[cp]["into_seed"] += 1
         else:
-            # 안전장치: 조회 기준 wallet과 무관한 이상 데이터는 스킵
             continue
 
         per_counterparty_seed_count[cp][wallet] += 1
@@ -349,7 +360,6 @@ def build_hub_scores(
         in_cnt = direction_counts[cp]["into_seed"]
         directional_diversity = int(out_cnt > 0) + int(in_cnt > 0)
 
-        # MVP 점수
         score = (
             shared_seed_count * 3
             + min(total_interactions, 10)
@@ -358,8 +368,7 @@ def build_hub_scores(
         )
 
         label = labels.get(cp)
-        is_exchange_labeled = 1 if label else 0
-        if is_exchange_labeled:
+        if label:
             score += 3
 
         results.append(
@@ -372,9 +381,20 @@ def build_hub_scores(
                 "into_seed": in_cnt,
                 "token_variety": len(token_set[cp]),
                 "label": label or "",
+                "exchange_hits": "",
                 "seeds": ", ".join(sorted(seed_counter.keys())),
             }
         )
+
+    candidate_addresses = [r["address"] for r in results]
+    exchange_hits = find_exchange_hits(conn, candidate_addresses, chainid, days)
+
+    for row in results:
+        hits = exchange_hits.get(normalize(row["address"]), [])
+        uniq_hits = sorted(set(hits))
+        row["exchange_hits"] = ", ".join(uniq_hits) if uniq_hits else ""
+        if uniq_hits:
+            row["score"] += 5
 
     results.sort(key=lambda x: (-x["score"], -x["shared_seed_count"], -x["total_interactions"]))
     return results
@@ -394,6 +414,7 @@ def export_csv(path: str, rows: List[dict]) -> None:
                     "into_seed",
                     "token_variety",
                     "label",
+                    "exchange_hits",
                     "seeds",
                 ]
             )
@@ -409,7 +430,7 @@ def export_csv(path: str, rows: List[dict]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Etherscan V2 반복 지갑 탐지 MVP")
     parser.add_argument("--seeds", required=True, help="시드 주소 txt 파일 경로")
-    parser.add_argument("--chainid", default="1", help="EVM chainid. Ethereum=1, BSC=56")
+    parser.add_argument("--chainid", default="1", help="EVM chainid. Ethereum=1")
     parser.add_argument("--days", type=int, default=30, help="최근 며칠 데이터 볼지")
     parser.add_argument("--offset", type=int, default=100, help="페이지당 전송 수")
     parser.add_argument("--max-pages", type=int, default=10, help="주소당 최대 페이지 수")
@@ -457,7 +478,9 @@ def main() -> int:
     for row in rows[: args.top]:
         print(
             f"score={row['score']:>2} | shared={row['shared_seed_count']} | "
-            f"interactions={row['total_interactions']} | label={row['label'] or '-'} | "
+            f"interactions={row['total_interactions']} | "
+            f"exchange={row.get('exchange_hits') or '-'} | "
+            f"label={row['label'] or '-'} | "
             f"{row['address']}"
         )
 
