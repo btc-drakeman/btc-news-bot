@@ -9,6 +9,7 @@ Etherscan V2 기반 반복 지갑(허브 후보) 탐지 MVP
 - 허브 후보 점수를 계산합니다.
 - 허브 후보가 대표 거래소 주소로 전송한 흔적이 있으면 exchange_hits로 표시합니다.
 - 시드 주소에서 어떤 토큰이 어디로 나갔는지 상세 출금 내역도 함께 출력/CSV 저장합니다.
+- 의미 있는 온체인 결과는 텔레그램으로도 알림 전송합니다.
 
 기본 체인: Ethereum Mainnet (chainid=1)
 """
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import hashlib
 import os
 import sqlite3
 import time
@@ -48,6 +50,9 @@ EXCHANGE_WALLETS = {
     # Bybit
     "0xf89d7b9c864f589bbf53a82105107622b35eaa40": "BYBIT",
 }
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 @dataclass
@@ -123,6 +128,15 @@ def ensure_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS exchange_labels (
             address TEXT PRIMARY KEY,
             label TEXT NOT NULL
+        )
+        '''
+    )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS sent_alerts (
+            alert_key TEXT PRIMARY KEY,
+            alert_type TEXT NOT NULL,
+            created_at INTEGER NOT NULL
         )
         '''
     )
@@ -529,6 +543,157 @@ def export_csv(path: str, rows: List[dict]) -> None:
         writer.writerows(rows)
 
 
+def send_telegram_message(msg: str) -> bool:
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[TG] TELEGRAM_BOT_TOKEN 또는 TELEGRAM_CHAT_ID 없음", flush=True)
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        resp = requests.post(
+            url,
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": msg},
+            timeout=10,
+        )
+        ok = resp.status_code == 200
+        print(f"[TG] 전송 status={resp.status_code}", flush=True)
+        if not ok:
+            print(f"[TG] 응답={resp.text}", flush=True)
+        return ok
+    except Exception as e:
+        print(f"[TG] 전송 오류: {e}", flush=True)
+        return False
+
+
+def make_alert_key(*parts: str) -> str:
+    raw = "||".join(str(p) for p in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def has_sent_alert(conn: sqlite3.Connection, alert_key: str) -> bool:
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT 1 FROM sent_alerts WHERE alert_key = ?",
+        (alert_key,),
+    ).fetchone()
+    return row is not None
+
+
+def mark_alert_sent(conn: sqlite3.Connection, alert_key: str, alert_type: str) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        '''
+        INSERT OR IGNORE INTO sent_alerts (alert_key, alert_type, created_at)
+        VALUES (?, ?, ?)
+        ''',
+        (alert_key, alert_type, utc_now_ts()),
+    )
+    conn.commit()
+
+
+def send_hub_candidate_alerts(conn: sqlite3.Connection, hub_rows: List[dict]) -> None:
+    print("\n=== 온체인 텔레그램 알림: 허브 후보 ===")
+    sent_count = 0
+
+    for row in hub_rows:
+        shared = int(row.get("shared_seed_count") or 0)
+        score = int(row.get("score") or 0)
+        exchange = row.get("exchange_hits") or "-"
+
+        if row["address"] == "0x0000000000000000000000000000000000000000":
+            continue
+        if shared < 2:
+            continue
+        if score < 12 and exchange == "-":
+            continue
+
+        alert_type = "hub_exchange" if exchange != "-" else "hub_candidate"
+        alert_key = make_alert_key(
+            alert_type,
+            row["address"],
+            score,
+            shared,
+            exchange,
+            row.get("seeds", ""),
+        )
+
+        if has_sent_alert(conn, alert_key):
+            continue
+
+        msg = (
+            "[ONCHAIN] 허브 감지\n"
+            f"hub: {shorten(row['address'])}\n"
+            f"score: {score}\n"
+            f"shared: {shared}\n"
+            f"interactions: {row.get('total_interactions', 0)}\n"
+            f"exchange: {exchange}\n"
+            f"label: {row.get('label') or '-'}"
+        )
+
+        if send_telegram_message(msg):
+            mark_alert_sent(conn, alert_key, alert_type)
+            sent_count += 1
+
+    print(f"[TG] 허브 후보 알림 전송 수: {sent_count}", flush=True)
+
+
+def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> None:
+    print("\n=== 온체인 텔레그램 알림: 출금 상세 ===")
+    sent_count = 0
+
+    for row in outflow_rows:
+        exchange = row.get("hub_exchange_hits") or "-"
+        is_hub = row.get("is_hub_candidate") == "Y"
+        shared = int(row.get("hub_shared_seed_count") or 0)
+        score = int(row.get("hub_score") or 0)
+
+        should_alert = False
+        alert_type = ""
+
+        if exchange != "-":
+            should_alert = True
+            alert_type = "outflow_exchange"
+        elif is_hub and shared >= 2 and score >= 12:
+            should_alert = True
+            alert_type = "outflow_hub"
+
+        if not should_alert:
+            continue
+        if row["to_addr"] == "0x0000000000000000000000000000000000000000":
+            continue
+
+        alert_key = make_alert_key(
+            alert_type,
+            row["tx_hash"],
+            row["seed"],
+            row["to_addr"],
+            row["token_symbol"],
+            row["amount"],
+            exchange,
+        )
+
+        if has_sent_alert(conn, alert_key):
+            continue
+
+        msg = (
+            "[ONCHAIN] 시드 출금 감지\n"
+            f"seed: {shorten(row['seed'])}\n"
+            f"to: {shorten(row['to_addr'])}\n"
+            f"token: {row['token_symbol']}\n"
+            f"amount: {row['amount']}\n"
+            f"hub: {'Y' if is_hub else '-'}\n"
+            f"shared: {shared if is_hub else '-'}\n"
+            f"score: {score if is_hub else '-'}\n"
+            f"exchange: {exchange}"
+        )
+
+        if send_telegram_message(msg):
+            mark_alert_sent(conn, alert_key, alert_type)
+            sent_count += 1
+
+    print(f"[TG] 출금 상세 알림 전송 수: {sent_count}", flush=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Etherscan V2 반복 지갑 탐지 MVP")
     parser.add_argument("--seeds", required=True, help="시드 주소 txt 파일 경로")
@@ -597,6 +762,9 @@ def main() -> int:
 
     detail_csv = f"seed_outflows_{args.csv}"
     export_csv(detail_csv, outflow_rows)
+
+    send_hub_candidate_alerts(conn, rows)
+    send_outflow_alerts(conn, outflow_rows)
 
     print(f"\n[INFO] 결과 CSV 저장: {args.csv}")
     print(f"[INFO] 시드 출금 상세 CSV 저장: {detail_csv}")
