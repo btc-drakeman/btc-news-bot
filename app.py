@@ -141,33 +141,61 @@ def check_signal(symbol):
     try:
         data = get_kline(symbol)
 
-        if not isinstance(data, list) or len(data) < 5:
+        if not isinstance(data, list) or len(data) < 15:
             print(f"{symbol} | kline 데이터 부족", flush=True)
             return
 
         volumes = [float(x[5]) for x in data]
         prices = [float(x[4]) for x in data]
 
-        recent_vol = volumes[-1]
-        prev_vol = volumes[-2]
-        avg_vol = sum(volumes[:-1]) / len(volumes[:-1])
+        # 완성된 1분봉 기준
+        # [-1] = 진행 중일 가능성 있는 현재 봉
+        # [-2] = 방금 막 끝난 봉
+        # [-3] = 그 이전 봉
+        recent_vol = volumes[-2]
+        prev_vol = volumes[-3]
 
-        prev_price = prices[-2]
-        last_price = prices[-1]
+        recent_price = prices[-2]
+        prev_price = prices[-3]
+
+        # 최근 10개 완성봉 평균 거래량
+        avg_window = volumes[-13:-3]
+        if not avg_window:
+            print(f"{symbol} | 평균 거래량 계산 실패", flush=True)
+            return
+
+        avg_vol = sum(avg_window) / len(avg_window)
 
         if prev_price <= 0:
             return
 
-        price_change = (last_price - prev_price) / prev_price * 100
+        price_change = (recent_price - prev_price) / prev_price * 100
 
         print(
-            f"[SIGNAL] {symbol} | {price_change:.2f}% | "
+            f"[SIGNAL] {symbol} | chg={price_change:.2f}% | "
             f"recent_vol={recent_vol:.2f} | prev_vol={prev_vol:.2f} | avg_vol={avg_vol:.2f}",
             flush=True
         )
 
-        is_long = check_long_signal(recent_vol, prev_vol, avg_vol, price_change)
-        is_short = check_short_signal(recent_vol, prev_vol, avg_vol, price_change)
+        # 기존보다 조금 완화한 조건
+        is_long = (
+            avg_vol > 0
+            and recent_vol > avg_vol * 1.5
+            and recent_vol > prev_vol
+            and price_change > 0.4
+        )
+
+        is_short = (
+            avg_vol > 0
+            and recent_vol > avg_vol * 1.5
+            and recent_vol > prev_vol
+            and price_change < -0.4
+        )
+
+        print(
+            f"[DEBUG] {symbol} | long={is_long} | short={is_short}",
+            flush=True
+        )
 
         if not is_long and not is_short:
             return
@@ -185,7 +213,7 @@ def check_signal(symbol):
 
             send_telegram(
                 f"{symbol} 🚀 LONG 신호\n"
-                f"1분 변동률: {price_change:.2f}%\n"
+                f"확정 1분 변동률: {price_change:.2f}%\n"
                 f"최근 거래량: {recent_vol:.2f}\n"
                 f"이전 거래량: {prev_vol:.2f}\n"
                 f"평균 거래량: {avg_vol:.2f}"
@@ -202,7 +230,7 @@ def check_signal(symbol):
 
             send_telegram(
                 f"{symbol} 🔻 SHORT 신호\n"
-                f"1분 변동률: {price_change:.2f}%\n"
+                f"확정 1분 변동률: {price_change:.2f}%\n"
                 f"최근 거래량: {recent_vol:.2f}\n"
                 f"이전 거래량: {prev_vol:.2f}\n"
                 f"평균 거래량: {avg_vol:.2f}"

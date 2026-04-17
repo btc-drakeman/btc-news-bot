@@ -8,6 +8,7 @@ Etherscan V2 기반 반복 지갑(허브 후보) 탐지 MVP
 - 공통 상대 주소를 집계한 뒤
 - 허브 후보 점수를 계산합니다.
 - 허브 후보가 대표 거래소 주소로 전송한 흔적이 있으면 exchange_hits로 표시합니다.
+- 시드 주소에서 어떤 토큰이 어디로 나갔는지 상세 출금 내역도 함께 출력/CSV 저장합니다.
 
 기본 체인: Ethereum Mainnet (chainid=1)
 """
@@ -71,6 +72,28 @@ def normalize(addr: str) -> str:
 
 def utc_now_ts() -> int:
     return int(datetime.now(timezone.utc).timestamp())
+
+
+def shorten(addr: str, head: int = 6, tail: int = 4) -> str:
+    addr = normalize(addr)
+    if len(addr) <= head + tail:
+        return addr
+    return f"{addr[:head]}...{addr[-tail:]}"
+
+
+def format_token_amount(value_raw: str, token_decimal: int) -> str:
+    try:
+        value_int = int(value_raw)
+        decimals = max(int(token_decimal or 0), 0)
+        value = value_int / (10 ** decimals) if decimals else float(value_int)
+
+        if value == 0:
+            return "0"
+        if value >= 1:
+            return f"{value:,.4f}".rstrip("0").rstrip(".")
+        return f"{value:.8f}".rstrip("0").rstrip(".")
+    except Exception:
+        return value_raw
 
 
 def ensure_db(conn: sqlite3.Connection) -> None:
@@ -400,24 +423,103 @@ def build_hub_scores(
     return results
 
 
+def get_seed_outflow_details(
+    conn: sqlite3.Connection,
+    seeds: List[str],
+    chainid: str,
+    days: int,
+    candidate_rows: List[dict],
+) -> List[dict]:
+    cutoff = utc_now_ts() - days * 86400
+    cur = conn.cursor()
+
+    candidate_map = {normalize(r["address"]): r for r in candidate_rows}
+    outflows: List[dict] = []
+
+    for seed in seeds:
+        seed = normalize(seed)
+        rows = cur.execute(
+            '''
+            SELECT
+                timestamp,
+                tx_hash,
+                from_addr,
+                to_addr,
+                token_symbol,
+                token_name,
+                contract_address,
+                value_raw,
+                token_decimal
+            FROM transfers
+            WHERE chainid = ?
+              AND timestamp >= ?
+              AND wallet = ?
+              AND from_addr = ?
+            ORDER BY timestamp DESC
+            ''',
+            (chainid, cutoff, seed, seed),
+        ).fetchall()
+
+        for (
+            timestamp,
+            tx_hash,
+            from_addr,
+            to_addr,
+            token_symbol,
+            token_name,
+            contract_address,
+            value_raw,
+            token_decimal,
+        ) in rows:
+            to_addr = normalize(to_addr)
+            candidate = candidate_map.get(to_addr)
+
+            outflows.append(
+                {
+                    "time_utc": datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "seed": seed,
+                    "seed_short": shorten(seed),
+                    "to_addr": to_addr,
+                    "to_short": shorten(to_addr),
+                    "token_symbol": token_symbol or "-",
+                    "token_name": token_name or "-",
+                    "amount": format_token_amount(value_raw, token_decimal),
+                    "contract_address": contract_address,
+                    "tx_hash": tx_hash,
+                    "is_hub_candidate": "Y" if candidate else "",
+                    "hub_score": candidate["score"] if candidate else "",
+                    "hub_shared_seed_count": candidate["shared_seed_count"] if candidate else "",
+                    "hub_total_interactions": candidate["total_interactions"] if candidate else "",
+                    "hub_exchange_hits": candidate["exchange_hits"] if candidate else "",
+                    "hub_label": candidate["label"] if candidate else "",
+                }
+            )
+
+    outflows.sort(key=lambda x: (x["time_utc"], x["seed"], x["to_addr"]), reverse=True)
+    return outflows
+
+
+def print_seed_outflow_details(rows: List[dict], top: int = 20) -> None:
+    print("\n=== 시드 출금 상세 ===")
+    if not rows:
+        print("(없음)")
+        return
+
+    for row in rows[:top]:
+        print(
+            f"{row['time_utc']} | "
+            f"seed={row['seed_short']} -> to={row['to_short']} | "
+            f"token={row['token_symbol']} | amount={row['amount']} | "
+            f"hub={row['is_hub_candidate'] or '-'} | "
+            f"exchange={row['hub_exchange_hits'] or '-'}"
+        )
+
+
 def export_csv(path: str, rows: List[dict]) -> None:
     if not rows:
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(
-                [
-                    "address",
-                    "score",
-                    "shared_seed_count",
-                    "total_interactions",
-                    "out_from_seed",
-                    "into_seed",
-                    "token_variety",
-                    "label",
-                    "exchange_hits",
-                    "seeds",
-                ]
-            )
+            writer.writerow([])
         return
 
     fieldnames = list(rows[0].keys())
@@ -435,7 +537,7 @@ def main() -> int:
     parser.add_argument("--offset", type=int, default=100, help="페이지당 전송 수")
     parser.add_argument("--max-pages", type=int, default=10, help="주소당 최대 페이지 수")
     parser.add_argument("--sleep-sec", type=float, default=0.4, help="API 호출 간 대기")
-    parser.add_argument("--top", type=int, default=20, help="상위 몇 개 허브 후보 출력할지")
+    parser.add_argument("--top", type=int, default=20, help="상위 몇 개 허브 후보/상세 출력할지")
     parser.add_argument("--csv", default="hub_candidates.csv", help="결과 CSV 파일명")
     args = parser.parse_args()
 
@@ -484,7 +586,20 @@ def main() -> int:
             f"{row['address']}"
         )
 
+    outflow_rows = get_seed_outflow_details(
+        conn=conn,
+        seeds=seeds,
+        chainid=args.chainid,
+        days=args.days,
+        candidate_rows=rows,
+    )
+    print_seed_outflow_details(outflow_rows, top=args.top)
+
+    detail_csv = f"seed_outflows_{args.csv}"
+    export_csv(detail_csv, outflow_rows)
+
     print(f"\n[INFO] 결과 CSV 저장: {args.csv}")
+    print(f"[INFO] 시드 출금 상세 CSV 저장: {detail_csv}")
     print(f"[INFO] SQLite DB 저장: {DB_PATH}")
 
     conn.close()
