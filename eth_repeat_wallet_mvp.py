@@ -25,7 +25,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
 import requests
 
@@ -41,14 +41,31 @@ EXCHANGE_WALLETS = {
     "0xd551234ae421e3bcba99a0da6d736074f22192ff": "BINANCE",
     "0x564286362092d8e7936f0549571a803b203aaced": "BINANCE",
     "0x0681d8db095565fe8a346fa0277bffde9c0edbbf": "BINANCE",
+    "0x28c6c06298d514db089934071355e5743bf21d60": "BINANCE",
+
     # OKX
     "0x1ab4971b1a5d0b22c1ff6d69b6b437f93d1b6f54": "OKX",
     "0x4e9ce36e442e55ecd9025b9a6e0d88485d628a67": "OKX",
+
     # Coinbase
     "0x503828976d22510aad0201ac7ec88293211d23da": "COINBASE",
     "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740": "COINBASE",
+
     # Bybit
     "0xf89d7b9c864f589bbf53a82105107622b35eaa40": "BYBIT",
+}
+
+ROUTER_OR_PROTOCOL_ADDRESSES = {
+    "0x000000000004444c5dc75cb358380d2e3de08a90": "UNISWAP_V4_POOL_MANAGER",
+    "0x5e1f62dac767b0491e3ce72469c217365d5b48cc": "OKX_DEX_ROUTER",
+}
+
+IGNORE_ADDRESSES = {
+    "0x0000000000000000000000000000000000000000",
+}
+
+QUOTE_TOKENS = {
+    "ETH", "WETH", "USDT", "USDC", "USDE", "DAI", "WBTC",
 }
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -84,6 +101,83 @@ def shorten(addr: str, head: int = 6, tail: int = 4) -> str:
     if len(addr) <= head + tail:
         return addr
     return f"{addr[:head]}...{addr[-tail:]}"
+
+
+
+
+def get_address_kind_and_label(addr: str) -> Tuple[str, str]:
+    addr = normalize(addr)
+    if addr in IGNORE_ADDRESSES:
+        return "ignore", "ZERO_ADDRESS"
+    if addr in EXCHANGE_WALLETS:
+        return "exchange", EXCHANGE_WALLETS[addr]
+    if addr in ROUTER_OR_PROTOCOL_ADDRESSES:
+        return "protocol", ROUTER_OR_PROTOCOL_ADDRESSES[addr]
+    return "unknown", ""
+
+
+def is_quote_token(symbol: str) -> bool:
+    return (symbol or "").upper() in QUOTE_TOKENS
+
+
+def infer_swap_action_for_seed(
+    conn: sqlite3.Connection,
+    chainid: str,
+    seed: str,
+    tx_hash: str,
+) -> Tuple[str, str]:
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        SELECT from_addr, to_addr, token_symbol, value_raw, token_decimal
+        FROM transfers
+        WHERE chainid = ? AND wallet = ? AND tx_hash = ?
+        """,
+        (chainid, normalize(seed), tx_hash),
+    ).fetchall()
+
+    sent_symbols = []
+    recv_symbols = []
+
+    for from_addr, to_addr, token_symbol, value_raw, token_decimal in rows:
+        symbol = (token_symbol or "").upper().strip()
+        if not symbol:
+            continue
+
+        from_addr = normalize(from_addr)
+        to_addr = normalize(to_addr)
+
+        try:
+            value_int = int(value_raw or "0")
+        except Exception:
+            value_int = 0
+        if value_int <= 0:
+            continue
+
+        if from_addr == normalize(seed) and to_addr != normalize(seed):
+            sent_symbols.append(symbol)
+        elif to_addr == normalize(seed) and from_addr != normalize(seed):
+            recv_symbols.append(symbol)
+
+    sent = sorted(set(sent_symbols))
+    recv = sorted(set(recv_symbols))
+
+    if not sent and not recv:
+        return "OTHER", "-"
+
+    sent_quote = [s for s in sent if is_quote_token(s)]
+    sent_alt = [s for s in sent if not is_quote_token(s)]
+    recv_quote = [s for s in recv if is_quote_token(s)]
+    recv_alt = [s for s in recv if not is_quote_token(s)]
+
+    if sent_quote and recv_alt:
+        return "BUY", ", ".join(recv_alt)
+    if sent_alt and recv_quote:
+        return "SELL", ", ".join(sent_alt)
+    if sent_alt and recv_alt:
+        return "SWAP", f"{', '.join(sent_alt)} -> {', '.join(recv_alt)}"
+
+    return "OTHER", "-"
 
 
 def format_token_amount(value_raw: str, token_decimal: int) -> str:
@@ -125,8 +219,9 @@ def ensure_db(conn: sqlite3.Connection) -> None:
     )
     cur.execute(
         '''
-        CREATE TABLE IF NOT EXISTS exchange_labels (
+        CREATE TABLE IF NOT EXISTS address_labels (
             address TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
             label TEXT NOT NULL
         )
         '''
@@ -145,11 +240,25 @@ def ensure_db(conn: sqlite3.Connection) -> None:
 
 def seed_exchange_labels(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
+
     for address, label in EXCHANGE_WALLETS.items():
         cur.execute(
-            "INSERT OR IGNORE INTO exchange_labels (address, label) VALUES (?, ?)",
-            (normalize(address), label),
+            "INSERT OR REPLACE INTO address_labels (address, kind, label) VALUES (?, ?, ?)",
+            (normalize(address), "exchange", label),
         )
+
+    for address, label in ROUTER_OR_PROTOCOL_ADDRESSES.items():
+        cur.execute(
+            "INSERT OR REPLACE INTO address_labels (address, kind, label) VALUES (?, ?, ?)",
+            (normalize(address), "protocol", label),
+        )
+
+    for address in IGNORE_ADDRESSES:
+        cur.execute(
+            "INSERT OR REPLACE INTO address_labels (address, kind, label) VALUES (?, ?, ?)",
+            (normalize(address), "ignore", "ZERO_ADDRESS"),
+        )
+
     conn.commit()
 
 
@@ -326,20 +435,21 @@ def find_exchange_hits(
 
     for addr in candidate_addresses:
         rows = cur.execute(
-            '''
+            """
             SELECT DISTINCT to_addr
             FROM transfers
             WHERE chainid = ?
               AND timestamp >= ?
               AND from_addr = ?
-            ''',
+            """,
             (chainid, cutoff, normalize(addr)),
         ).fetchall()
 
         for (to_addr,) in rows:
             to_addr = normalize(to_addr)
-            if to_addr in EXCHANGE_WALLETS:
-                hits[normalize(addr)].append(EXCHANGE_WALLETS[to_addr])
+            kind, label = get_address_kind_and_label(to_addr)
+            if kind == "exchange":
+                hits[normalize(addr)].append(label)
 
     return hits
 
@@ -354,11 +464,11 @@ def build_hub_scores(
     cur = conn.cursor()
 
     rows = cur.execute(
-        '''
+        """
         SELECT wallet, from_addr, to_addr, timestamp, token_symbol, contract_address
         FROM transfers
         WHERE chainid = ? AND timestamp >= ?
-        ''',
+        """,
         (chainid, cutoff),
     ).fetchall()
 
@@ -380,11 +490,13 @@ def build_hub_scores(
         else:
             continue
 
+        addr_kind, _ = get_address_kind_and_label(cp)
+        if addr_kind == "ignore":
+            continue
+
         per_counterparty_seed_count[cp][wallet] += 1
         if token_symbol:
             token_set[cp].add(token_symbol)
-
-    labels = dict(cur.execute("SELECT address, label FROM exchange_labels").fetchall())
 
     results = []
     for cp, seed_counter in per_counterparty_seed_count.items():
@@ -396,6 +508,7 @@ def build_hub_scores(
         out_cnt = direction_counts[cp]["out_from_seed"]
         in_cnt = direction_counts[cp]["into_seed"]
         directional_diversity = int(out_cnt > 0) + int(in_cnt > 0)
+        addr_kind, addr_label = get_address_kind_and_label(cp)
 
         score = (
             shared_seed_count * 3
@@ -404,9 +517,10 @@ def build_hub_scores(
             + min(len(token_set[cp]), 5)
         )
 
-        label = labels.get(cp)
-        if label:
+        if addr_kind == "exchange":
             score += 3
+        elif addr_kind == "protocol":
+            score += 1
 
         results.append(
             {
@@ -417,7 +531,8 @@ def build_hub_scores(
                 "out_from_seed": out_cnt,
                 "into_seed": in_cnt,
                 "token_variety": len(token_set[cp]),
-                "label": label or "",
+                "label_kind": addr_kind,
+                "label": addr_label or "",
                 "exchange_hits": "",
                 "seeds": ", ".join(sorted(seed_counter.keys())),
             }
@@ -453,7 +568,7 @@ def get_seed_outflow_details(
     for seed in seeds:
         seed = normalize(seed)
         rows = cur.execute(
-            '''
+            """
             SELECT
                 timestamp,
                 tx_hash,
@@ -470,7 +585,7 @@ def get_seed_outflow_details(
               AND wallet = ?
               AND from_addr = ?
             ORDER BY timestamp DESC
-            ''',
+            """,
             (chainid, cutoff, seed, seed),
         ).fetchall()
 
@@ -486,7 +601,9 @@ def get_seed_outflow_details(
             token_decimal,
         ) in rows:
             to_addr = normalize(to_addr)
+            target_kind, target_label = get_address_kind_and_label(to_addr)
             candidate = candidate_map.get(to_addr)
+            action, action_token = infer_swap_action_for_seed(conn, chainid, seed, tx_hash)
 
             outflows.append(
                 {
@@ -500,12 +617,17 @@ def get_seed_outflow_details(
                     "amount": format_token_amount(value_raw, token_decimal),
                     "contract_address": contract_address,
                     "tx_hash": tx_hash,
+                    "target_kind": target_kind,
+                    "target_label": target_label or "-",
+                    "swap_action": action,
+                    "swap_token": action_token,
                     "is_hub_candidate": "Y" if candidate else "",
                     "hub_score": candidate["score"] if candidate else "",
                     "hub_shared_seed_count": candidate["shared_seed_count"] if candidate else "",
                     "hub_total_interactions": candidate["total_interactions"] if candidate else "",
                     "hub_exchange_hits": candidate["exchange_hits"] if candidate else "",
                     "hub_label": candidate["label"] if candidate else "",
+                    "hub_label_kind": candidate["label_kind"] if candidate else "",
                 }
             )
 
@@ -524,6 +646,8 @@ def print_seed_outflow_details(rows: List[dict], top: int = 20) -> None:
             f"{row['time_utc']} | "
             f"seed={row['seed']} -> to={row['to_addr']} | "
             f"token={row['token_symbol']} | amount={row['amount']} | "
+            f"kind={row.get('target_kind') or '-'} | label={row.get('target_label') or '-'} | "
+            f"swap={row.get('swap_action') or '-'} {row.get('swap_token') or '-'} | "
             f"hub={row['is_hub_candidate'] or '-'} | "
             f"exchange={row['hub_exchange_hits'] or '-'}"
         )
@@ -600,7 +724,7 @@ def send_hub_candidate_alerts(conn: sqlite3.Connection, hub_rows: List[dict]) ->
         score = int(row.get("score") or 0)
         exchange = row.get("exchange_hits") or "-"
 
-        if row["address"] == "0x0000000000000000000000000000000000000000":
+        if row["address"] in IGNORE_ADDRESSES:
             continue
         if shared < 2:
             continue
@@ -627,6 +751,7 @@ def send_hub_candidate_alerts(conn: sqlite3.Connection, hub_rows: List[dict]) ->
             f"shared: {shared}\n"
             f"interactions: {row.get('total_interactions', 0)}\n"
             f"exchange: {exchange}\n"
+            f"kind: {row.get('label_kind') or '-'}\n"
             f"label: {row.get('label') or '-'}"
         )
 
@@ -646,6 +771,10 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
         is_hub = row.get("is_hub_candidate") == "Y"
         shared = int(row.get("hub_shared_seed_count") or 0)
         score = int(row.get("hub_score") or 0)
+        target_kind = row.get("target_kind") or "-"
+        target_label = row.get("target_label") or "-"
+        swap_action = row.get("swap_action") or "-"
+        swap_token = row.get("swap_token") or "-"
 
         should_alert = False
         alert_type = ""
@@ -653,13 +782,16 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
         if exchange != "-":
             should_alert = True
             alert_type = "outflow_exchange"
+        elif target_kind == "protocol" and swap_action in {"BUY", "SELL", "SWAP"}:
+            should_alert = True
+            alert_type = "outflow_protocol_swap"
         elif is_hub and shared >= 2 and score >= 12:
             should_alert = True
             alert_type = "outflow_hub"
 
         if not should_alert:
             continue
-        if row["to_addr"] == "0x0000000000000000000000000000000000000000":
+        if row["to_addr"] in IGNORE_ADDRESSES:
             continue
 
         alert_key = make_alert_key(
@@ -670,6 +802,8 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
             row["token_symbol"],
             row["amount"],
             exchange,
+            swap_action,
+            swap_token,
         )
 
         if has_sent_alert(conn, alert_key):
@@ -679,8 +813,12 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
             "[ONCHAIN] 시드 출금 감지\n"
             f"seed: {shorten(row['seed'])}\n"
             f"to: {shorten(row['to_addr'])}\n"
+            f"kind: {target_kind}\n"
+            f"label: {target_label}\n"
             f"token: {row['token_symbol']}\n"
             f"amount: {row['amount']}\n"
+            f"swap: {swap_action}\n"
+            f"swap_token: {swap_token}\n"
             f"hub: {'Y' if is_hub else '-'}\n"
             f"shared: {shared if is_hub else '-'}\n"
             f"score: {score if is_hub else '-'}\n"
@@ -747,6 +885,7 @@ def main() -> int:
             f"score={row['score']:>2} | shared={row['shared_seed_count']} | "
             f"interactions={row['total_interactions']} | "
             f"exchange={row.get('exchange_hits') or '-'} | "
+            f"kind={row.get('label_kind') or '-'} | "
             f"label={row['label'] or '-'} | "
             f"{row['address']}"
         )

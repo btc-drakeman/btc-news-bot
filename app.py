@@ -23,17 +23,12 @@ last_alert_time: Dict[str, float] = {}
 spot_loop_started = False
 onchain_loop_started = False
 
-CURRENT_SYMBOLS: List[str] = []
-LAST_SYMBOL_UPDATE_TIME = 0.0
-
 SIGNAL_INTERVAL = 60            # 1분마다 체크하되, 판단은 5분/15분봉 기준
 ONCHAIN_INTERVAL = 600          # 온체인: 10분
 SIGNAL_COOLDOWN = 1800          # 일반 시세 알림 재알림 제한 (30분)
 ONCHAIN_CHART_COOLDOWN = 1800   # 온체인-차트 결합 알림 재알림 제한 (30분)
 OPPOSITE_SIDE_LOCK = 900        # 반대 방향 금지 시간 (15분)
 ONCHAIN_DETAIL_CSV = "seed_outflows_hub_candidates.csv"
-SYMBOL_REFRESH_INTERVAL = 900   # 감시 종목 Top50 재선정 주기 (15분)
-TOP_SYMBOL_COUNT = 50
 
 SIGNAL_INTERVAL_5M = "5m"
 TREND_INTERVAL_15M = "15m"
@@ -42,15 +37,6 @@ TREND_INTERVAL_15M = "15m"
 FIVE_MIN_VOL_MULTIPLIER = 2.5   # 최근 2개 5분봉 거래량이 평균의 2.5배 이상
 FIVE_MIN_MIN_CHANGE = 0.35      # 각 5분봉 최소 변동률(%)
 FIVE_MIN_TOTAL_CHANGE = 0.90    # 최근 2개 5분봉 누적 변동률(%)
-
-# 선행 진입(시작 직후 포착) - 기존 확정 신호와 분리
-LEAD_VOL_MULTIPLIER = 2.0       # 최근 1개 5분봉 거래량이 평균의 2배 이상
-LEAD_MIN_CHANGE = 0.55          # 최근 1개 5분봉 최소 변동률(%)
-LEAD_PREV_MAX_OPPOSITE = 0.25   # 직전 봉이 강한 반대 봉이면 선행 진입 제외
-
-# 선물가 vs 공정가(괴리) 필터
-LEAD_MAX_BASIS_PCT = 0.25       # 선행 진입은 괴리 0.25% 이하여야 허용
-CONFIRM_MAX_BASIS_PCT = 0.40    # 확정 진입은 괴리 0.40% 이하여야 허용
 
 # 휩쏘(가짜 돌파/긴 꼬리) 필터
 MIN_BODY_RATIO = 0.45           # 몸통이 전체 레인지의 45% 이상
@@ -133,82 +119,19 @@ def get_top_symbols(n: int = 50) -> List[str]:
 def get_final_symbols() -> List[str]:
     spot = get_spot_symbols()
     futures = get_futures_bases()
-    top = set(get_top_symbols(TOP_SYMBOL_COUNT))
+    top = set(get_top_symbols(50))
 
-    final: List[str] = []
+    final = []
     for base, symbol in spot.items():
         if base in futures and symbol in top:
             final.append(symbol)
 
-    return sorted(final)[:TOP_SYMBOL_COUNT]
-
-
-def update_symbols_if_needed(force: bool = False) -> List[str]:
-    global CURRENT_SYMBOLS, LAST_SYMBOL_UPDATE_TIME
-
-    now = time.time()
-    if not force and CURRENT_SYMBOLS and (now - LAST_SYMBOL_UPDATE_TIME) < SYMBOL_REFRESH_INTERVAL:
-        return CURRENT_SYMBOLS
-
-    print("[SYMBOL UPDATE] Top50 재선정 시작", flush=True)
-    new_symbols = get_final_symbols()
-
-    added = sorted(set(new_symbols) - set(CURRENT_SYMBOLS))
-    removed = sorted(set(CURRENT_SYMBOLS) - set(new_symbols))
-
-    CURRENT_SYMBOLS = new_symbols
-    LAST_SYMBOL_UPDATE_TIME = now
-
-    print(f"[SYMBOL UPDATE] 감시 종목 수={len(CURRENT_SYMBOLS)}", flush=True)
-    if added:
-        print(f"[SYMBOL UPDATE] 추가: {added}", flush=True)
-    if removed:
-        print(f"[SYMBOL UPDATE] 제거: {removed}", flush=True)
-
-    return CURRENT_SYMBOLS
+    return final[:15]
 
 
 def get_kline(symbol: str, interval: str = "5m", limit: int = 40):
     url = f"https://api.mexc.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     return requests.get(url, timeout=10).json()
-
-
-def get_futures_price_map() -> Dict[str, dict]:
-    url = "https://contract.mexc.com/api/v1/contract/ticker"
-    data = requests.get(url, timeout=10).json()
-
-    price_map: Dict[str, dict] = {}
-
-    for row in data.get("data", []):
-        symbol_raw = str(row.get("symbol") or "").upper()
-        if not symbol_raw:
-            continue
-
-        base = symbol_raw.replace("_USDT", "").replace("USDT", "")
-        if not base or base in EXCLUDED:
-            continue
-
-        try:
-            last_price = float(row.get("lastPrice") or row.get("last_price") or 0)
-            fair_price = float(row.get("fairPrice") or row.get("fair_price") or 0)
-            index_price = float(row.get("indexPrice") or row.get("index_price") or 0)
-        except (TypeError, ValueError):
-            continue
-
-        ref_price = fair_price if fair_price > 0 else index_price
-        if last_price <= 0 or ref_price <= 0:
-            continue
-
-        basis_pct = (last_price - ref_price) / ref_price * 100
-        price_map[base] = {
-            "last_price": last_price,
-            "fair_price": fair_price,
-            "index_price": index_price,
-            "ref_price": ref_price,
-            "basis_pct": basis_pct,
-        }
-
-    return price_map
 
 
 def get_cooldown_key(symbol: str, side: str, prefix: str = "signal") -> str:
@@ -312,22 +235,11 @@ def is_valid_trend_candle(candle: dict, side: str) -> bool:
     return False
 
 
-def is_basis_ok(side: str, basis_pct: Optional[float], max_pct: float) -> bool:
-    if basis_pct is None:
-        return True
-    if side == "LONG" and basis_pct > max_pct:
-        return False
-    if side == "SHORT" and basis_pct < -max_pct:
-        return False
-    return True
-
-
 def check_long_signal(
     recent_candle: dict,
     prev_candle: dict,
     avg_vol: float,
     trend_direction: str,
-    basis_pct: Optional[float],
 ) -> bool:
     recent_vol = recent_candle["volume"]
     prev_vol = prev_candle["volume"]
@@ -346,7 +258,6 @@ def check_long_signal(
         and total_change > FIVE_MIN_TOTAL_CHANGE
         and is_valid_trend_candle(recent_candle, "LONG")
         and is_valid_trend_candle(prev_candle, "LONG")
-        and is_basis_ok("LONG", basis_pct, CONFIRM_MAX_BASIS_PCT)
     )
 
 
@@ -355,7 +266,6 @@ def check_short_signal(
     prev_candle: dict,
     avg_vol: float,
     trend_direction: str,
-    basis_pct: Optional[float],
 ) -> bool:
     recent_vol = recent_candle["volume"]
     prev_vol = prev_candle["volume"]
@@ -374,55 +284,10 @@ def check_short_signal(
         and total_change < -FIVE_MIN_TOTAL_CHANGE
         and is_valid_trend_candle(recent_candle, "SHORT")
         and is_valid_trend_candle(prev_candle, "SHORT")
-        and is_basis_ok("SHORT", basis_pct, CONFIRM_MAX_BASIS_PCT)
     )
 
 
-def check_long_lead_signal(
-    recent_candle: dict,
-    prev_candle: dict,
-    avg_vol: float,
-    trend_direction: str,
-    basis_pct: Optional[float],
-) -> bool:
-    recent_vol = recent_candle["volume"]
-    recent_change = recent_candle["change_pct"]
-
-    return (
-        avg_vol > 0
-        and trend_direction != "SHORT"
-        and recent_vol > avg_vol * LEAD_VOL_MULTIPLIER
-        and recent_change > LEAD_MIN_CHANGE
-        and is_valid_trend_candle(recent_candle, "LONG")
-        and prev_candle["change_pct"] > -LEAD_PREV_MAX_OPPOSITE
-        and prev_candle["body_ratio"] >= 0.25
-        and is_basis_ok("LONG", basis_pct, LEAD_MAX_BASIS_PCT)
-    )
-
-
-def check_short_lead_signal(
-    recent_candle: dict,
-    prev_candle: dict,
-    avg_vol: float,
-    trend_direction: str,
-    basis_pct: Optional[float],
-) -> bool:
-    recent_vol = recent_candle["volume"]
-    recent_change = recent_candle["change_pct"]
-
-    return (
-        avg_vol > 0
-        and trend_direction != "LONG"
-        and recent_vol > avg_vol * LEAD_VOL_MULTIPLIER
-        and recent_change < -LEAD_MIN_CHANGE
-        and is_valid_trend_candle(recent_candle, "SHORT")
-        and prev_candle["change_pct"] < LEAD_PREV_MAX_OPPOSITE
-        and prev_candle["body_ratio"] >= 0.25
-        and is_basis_ok("SHORT", basis_pct, LEAD_MAX_BASIS_PCT)
-    )
-
-
-def analyze_symbol(symbol: str, futures_price_map: Optional[Dict[str, dict]] = None) -> Optional[dict]:
+def analyze_symbol(symbol: str) -> Optional[dict]:
     data_5m = get_kline(symbol, interval=SIGNAL_INTERVAL_5M, limit=40)
     data_15m = get_kline(symbol, interval=TREND_INTERVAL_15M, limit=20)
 
@@ -443,19 +308,9 @@ def analyze_symbol(symbol: str, futures_price_map: Optional[Dict[str, dict]] = N
         return None
     avg_vol = sum(avg_window) / len(avg_window)
 
-    base = symbol[:-4]
-    price_info = (futures_price_map or {}).get(base, {})
-    basis_pct = price_info.get("basis_pct")
-    last_price = price_info.get("last_price")
-    fair_price = price_info.get("fair_price")
-    index_price = price_info.get("index_price")
-    ref_price = price_info.get("ref_price")
-
     trend_direction = get_trend_direction_15m(closes_15m)
-    is_long = check_long_signal(recent_candle, prev_candle, avg_vol, trend_direction, basis_pct)
-    is_short = check_short_signal(recent_candle, prev_candle, avg_vol, trend_direction, basis_pct)
-    is_lead_long = False if is_long else check_long_lead_signal(recent_candle, prev_candle, avg_vol, trend_direction, basis_pct)
-    is_lead_short = False if is_short else check_short_lead_signal(recent_candle, prev_candle, avg_vol, trend_direction, basis_pct)
+    is_long = check_long_signal(recent_candle, prev_candle, avg_vol, trend_direction)
+    is_short = check_short_signal(recent_candle, prev_candle, avg_vol, trend_direction)
 
     total_change = recent_candle["change_pct"] + prev_candle["change_pct"]
 
@@ -474,39 +329,14 @@ def analyze_symbol(symbol: str, futures_price_map: Optional[Dict[str, dict]] = N
         "prev_close_pos": prev_candle["close_pos"],
         "recent_range_pct": recent_candle["range_pct"],
         "prev_range_pct": prev_candle["range_pct"],
-        "last_price": last_price,
-        "fair_price": fair_price,
-        "index_price": index_price,
-        "ref_price": ref_price,
-        "basis_pct": basis_pct,
         "is_long": is_long,
         "is_short": is_short,
-        "is_lead_long": is_lead_long,
-        "is_lead_short": is_lead_short,
     }
-
-
-def format_basis_lines(analysis: dict) -> str:
-    basis_pct = analysis.get("basis_pct")
-    last_price = analysis.get("last_price")
-    fair_price = analysis.get("fair_price")
-    ref_price = analysis.get("ref_price")
-
-    if basis_pct is None or last_price is None or ref_price is None:
-        return "괴리: 데이터 없음"
-
-    fair_display = fair_price if fair_price and fair_price > 0 else ref_price
-    return (
-        f"선물가: {last_price:.6f}\n"
-        f"공정가: {fair_display:.6f}\n"
-        f"괴리율: {basis_pct:.3f}%"
-    )
 
 
 def send_signal_alert(analysis: dict) -> None:
     now = time.time()
     symbol = analysis["symbol"]
-    basis_lines = format_basis_lines(analysis)
 
     if analysis["is_long"]:
         key = get_cooldown_key(symbol, "LONG", prefix="signal")
@@ -520,7 +350,6 @@ def send_signal_alert(analysis: dict) -> None:
         last_alert_time[key] = now
         send_telegram(
             f"{symbol} 🚀 LONG 신호\n"
-            f"모드: 확정 진입\n"
             f"15분 방향: {analysis['trend_direction']}\n"
             f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
             f"이전 5분 변동률: {analysis['prev_change']:.2f}%\n"
@@ -528,8 +357,7 @@ def send_signal_alert(analysis: dict) -> None:
             f"최근 거래량: {analysis['recent_vol']:.2f}\n"
             f"이전 거래량: {analysis['prev_vol']:.2f}\n"
             f"평균 거래량: {analysis['avg_vol']:.2f}\n"
-            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}\n"
-            f"{basis_lines}"
+            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
         )
         return
 
@@ -545,7 +373,6 @@ def send_signal_alert(analysis: dict) -> None:
         last_alert_time[key] = now
         send_telegram(
             f"{symbol} 🔻 SHORT 신호\n"
-            f"모드: 확정 진입\n"
             f"15분 방향: {analysis['trend_direction']}\n"
             f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
             f"이전 5분 변동률: {analysis['prev_change']:.2f}%\n"
@@ -553,69 +380,17 @@ def send_signal_alert(analysis: dict) -> None:
             f"최근 거래량: {analysis['recent_vol']:.2f}\n"
             f"이전 거래량: {analysis['prev_vol']:.2f}\n"
             f"평균 거래량: {analysis['avg_vol']:.2f}\n"
-            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}\n"
-            f"{basis_lines}"
-        )
-        return
-
-    if analysis["is_lead_long"]:
-        key = get_cooldown_key(symbol, "LONG", prefix="lead_signal")
-        if key in last_alert_time and (now - last_alert_time[key] < SIGNAL_COOLDOWN):
-            print(f"{symbol} | 선행 LONG 쿨다운 중", flush=True)
-            return
-        if is_opposite_direction_locked(symbol, "LONG", prefix="signal") or is_opposite_direction_locked(symbol, "LONG", prefix="lead_signal"):
-            print(f"{symbol} | SHORT 알림 직후라 선행 LONG 잠금", flush=True)
-            return
-
-        last_alert_time[key] = now
-        send_telegram(
-            f"{symbol} ⚡ 선행 LONG 신호\n"
-            f"모드: 시작 직후 진입\n"
-            f"15분 방향: {analysis['trend_direction']}\n"
-            f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
-            f"최근 거래량: {analysis['recent_vol']:.2f}\n"
-            f"이전 거래량: {analysis['prev_vol']:.2f}\n"
-            f"평균 거래량: {analysis['avg_vol']:.2f}\n"
-            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 종가위치: {analysis['recent_close_pos']:.2f}\n"
-            f"{basis_lines}"
-        )
-        return
-
-    if analysis["is_lead_short"]:
-        key = get_cooldown_key(symbol, "SHORT", prefix="lead_signal")
-        if key in last_alert_time and (now - last_alert_time[key] < SIGNAL_COOLDOWN):
-            print(f"{symbol} | 선행 SHORT 쿨다운 중", flush=True)
-            return
-        if is_opposite_direction_locked(symbol, "SHORT", prefix="signal") or is_opposite_direction_locked(symbol, "SHORT", prefix="lead_signal"):
-            print(f"{symbol} | LONG 알림 직후라 선행 SHORT 잠금", flush=True)
-            return
-
-        last_alert_time[key] = now
-        send_telegram(
-            f"{symbol} ⚡ 선행 SHORT 신호\n"
-            f"모드: 시작 직후 진입\n"
-            f"15분 방향: {analysis['trend_direction']}\n"
-            f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
-            f"최근 거래량: {analysis['recent_vol']:.2f}\n"
-            f"이전 거래량: {analysis['prev_vol']:.2f}\n"
-            f"평균 거래량: {analysis['avg_vol']:.2f}\n"
-            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 종가위치: {analysis['recent_close_pos']:.2f}\n"
-            f"{basis_lines}"
+            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
         )
 
 
-def check_signal(symbol: str, futures_price_map: Optional[Dict[str, dict]] = None) -> None:
+def check_signal(symbol: str) -> None:
     try:
-        analysis = analyze_symbol(symbol, futures_price_map=futures_price_map)
+        analysis = analyze_symbol(symbol)
         if not analysis:
             print(f"{symbol} | kline 데이터 부족", flush=True)
             return
 
-        basis_text = (
-            f"basis={analysis['basis_pct']:.3f}%"
-            if analysis.get("basis_pct") is not None else
-            "basis=NA"
-        )
         print(
             f"[SIGNAL] {symbol} | trend={analysis['trend_direction']} | "
             f"chg1={analysis['recent_change']:.2f}% | "
@@ -623,22 +398,15 @@ def check_signal(symbol: str, futures_price_map: Optional[Dict[str, dict]] = Non
             f"chg_total={analysis['total_change']:.2f}% | "
             f"recent_vol={analysis['recent_vol']:.2f} | "
             f"prev_vol={analysis['prev_vol']:.2f} | avg_vol={analysis['avg_vol']:.2f} | "
-            f"body1={analysis['recent_body_ratio']:.2f} | body2={analysis['prev_body_ratio']:.2f} | "
-            f"{basis_text}",
+            f"body1={analysis['recent_body_ratio']:.2f} | body2={analysis['prev_body_ratio']:.2f}",
             flush=True,
         )
         print(
-            f"[DEBUG] {symbol} | long={analysis['is_long']} | short={analysis['is_short']} | "
-            f"lead_long={analysis['is_lead_long']} | lead_short={analysis['is_lead_short']}",
+            f"[DEBUG] {symbol} | long={analysis['is_long']} | short={analysis['is_short']}",
             flush=True,
         )
 
-        if not any([
-            analysis["is_long"],
-            analysis["is_short"],
-            analysis["is_lead_long"],
-            analysis["is_lead_short"],
-        ]):
+        if not analysis["is_long"] and not analysis["is_short"]:
             return
 
         send_signal_alert(analysis)
@@ -681,8 +449,12 @@ def should_watch_onchain_row(row: dict) -> bool:
 
     is_hub = (row.get("is_hub_candidate") or "") == "Y"
     exchange_hits = (row.get("hub_exchange_hits") or "").strip()
+    target_kind = (row.get("target_kind") or "").strip().lower()
+    swap_action = (row.get("swap_action") or "").strip().upper()
 
     if exchange_hits:
+        return True
+    if target_kind == "protocol" and swap_action in {"BUY", "SELL", "SWAP"}:
         return True
     if is_hub:
         return True
@@ -696,7 +468,6 @@ def analyze_onchain_chart_candidates() -> None:
             return
 
         spot_map = get_spot_symbols()
-        futures_price_map = get_futures_price_map()
         watched_symbols: Set[str] = set()
 
         for row in rows:
@@ -713,7 +484,7 @@ def analyze_onchain_chart_candidates() -> None:
                 continue
             watched_symbols.add(symbol)
 
-            analysis = analyze_symbol(symbol, futures_price_map=futures_price_map)
+            analysis = analyze_symbol(symbol)
             if not analysis:
                 print(f"[ONCHAIN-CHART] 차트 분석 실패: {symbol}", flush=True)
                 continue
@@ -725,19 +496,18 @@ def analyze_onchain_chart_candidates() -> None:
             seed = row.get("seed") or "-"
             to_addr = row.get("to_addr") or "-"
             token_name = row.get("token_name") or token_symbol
+            target_kind = (row.get("target_kind") or "-").strip() or "-"
+            target_label = (row.get("target_label") or "-").strip() or "-"
+            swap_action = (row.get("swap_action") or "-").strip() or "-"
+            swap_token = (row.get("swap_token") or "-").strip() or "-"
 
-            onchain_basis_text = (
-                f"basis={analysis['basis_pct']:.3f}%"
-                if analysis.get("basis_pct") is not None else
-                "basis=NA"
-            )
             print(
                 f"[ONCHAIN-CHART] {symbol} | from_onchain token={token_symbol} | "
-                f"hub={is_hub} | exchange={exchange_hits} | "
+                f"hub={is_hub} | exchange={exchange_hits} | kind={target_kind} | label={target_label} | "
+                f"swap={swap_action} {swap_token} | "
                 f"trend={analysis['trend_direction']} | "
                 f"chg_total={analysis['total_change']:.2f}% | "
-                f"recent_vol={analysis['recent_vol']:.2f} | avg_vol={analysis['avg_vol']:.2f} | "
-                f"{onchain_basis_text}",
+                f"recent_vol={analysis['recent_vol']:.2f} | avg_vol={analysis['avg_vol']:.2f}",
                 flush=True,
             )
 
@@ -770,8 +540,7 @@ def analyze_onchain_chart_candidates() -> None:
                 f"최근 2개 5분 누적: {analysis['total_change']:.2f}%\n"
                 f"최근 거래량: {analysis['recent_vol']:.2f}\n"
                 f"평균 거래량: {analysis['avg_vol']:.2f}\n"
-                f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}\n"
-                f"{format_basis_lines(analysis)}"
+                f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
             )
 
     except Exception as e:
@@ -827,16 +596,14 @@ def signal_loop() -> None:
             print("=" * 60, flush=True)
             print(f"[SIGNAL LOOP START] {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
 
-            symbols = update_symbols_if_needed()
-            futures_price_map = get_futures_price_map()
-            print(f"최종 감시 종목({len(symbols)}개): {symbols}", flush=True)
-            print(f"[FAIR PRICE MAP] 수신 종목 수={len(futures_price_map)}", flush=True)
+            symbols = get_final_symbols()
+            print(f"최종 감시 종목: {symbols}", flush=True)
 
             if not symbols:
                 print("감시 종목 없음", flush=True)
 
             for symbol in symbols:
-                check_signal(symbol, futures_price_map=futures_price_map)
+                check_signal(symbol)
                 time.sleep(0.2)
 
             elapsed = time.time() - loop_start
@@ -882,11 +649,6 @@ def health():
 
 def start_background_loops() -> None:
     global spot_loop_started, onchain_loop_started
-
-    try:
-        update_symbols_if_needed(force=True)
-    except Exception as e:
-        print(f"초기 종목 로딩 실패: {e}", flush=True)
 
     if not spot_loop_started:
         spot_loop_started = True
