@@ -23,12 +23,17 @@ last_alert_time: Dict[str, float] = {}
 spot_loop_started = False
 onchain_loop_started = False
 
+CURRENT_SYMBOLS: List[str] = []
+LAST_SYMBOL_UPDATE_TIME = 0.0
+
 SIGNAL_INTERVAL = 60            # 1분마다 체크하되, 판단은 5분/15분봉 기준
 ONCHAIN_INTERVAL = 600          # 온체인: 10분
 SIGNAL_COOLDOWN = 1800          # 일반 시세 알림 재알림 제한 (30분)
 ONCHAIN_CHART_COOLDOWN = 1800   # 온체인-차트 결합 알림 재알림 제한 (30분)
 OPPOSITE_SIDE_LOCK = 900        # 반대 방향 금지 시간 (15분)
 ONCHAIN_DETAIL_CSV = "seed_outflows_hub_candidates.csv"
+SYMBOL_REFRESH_INTERVAL = 900   # 감시 종목 Top50 재선정 주기 (15분)
+TOP_SYMBOL_COUNT = 50
 
 SIGNAL_INTERVAL_5M = "5m"
 TREND_INTERVAL_15M = "15m"
@@ -37,6 +42,11 @@ TREND_INTERVAL_15M = "15m"
 FIVE_MIN_VOL_MULTIPLIER = 2.5   # 최근 2개 5분봉 거래량이 평균의 2.5배 이상
 FIVE_MIN_MIN_CHANGE = 0.35      # 각 5분봉 최소 변동률(%)
 FIVE_MIN_TOTAL_CHANGE = 0.90    # 최근 2개 5분봉 누적 변동률(%)
+
+# 선행 진입(시작 직후 포착) - 기존 확정 신호와 분리
+LEAD_VOL_MULTIPLIER = 2.0       # 최근 1개 5분봉 거래량이 평균의 2배 이상
+LEAD_MIN_CHANGE = 0.55          # 최근 1개 5분봉 최소 변동률(%)
+LEAD_PREV_MAX_OPPOSITE = 0.25   # 직전 봉이 강한 반대 봉이면 선행 진입 제외
 
 # 휩쏘(가짜 돌파/긴 꼬리) 필터
 MIN_BODY_RATIO = 0.45           # 몸통이 전체 레인지의 45% 이상
@@ -119,14 +129,39 @@ def get_top_symbols(n: int = 50) -> List[str]:
 def get_final_symbols() -> List[str]:
     spot = get_spot_symbols()
     futures = get_futures_bases()
-    top = set(get_top_symbols(50))
+    top = set(get_top_symbols(TOP_SYMBOL_COUNT))
 
-    final = []
+    final: List[str] = []
     for base, symbol in spot.items():
         if base in futures and symbol in top:
             final.append(symbol)
 
-    return final[:15]
+    return sorted(final)[:TOP_SYMBOL_COUNT]
+
+
+def update_symbols_if_needed(force: bool = False) -> List[str]:
+    global CURRENT_SYMBOLS, LAST_SYMBOL_UPDATE_TIME
+
+    now = time.time()
+    if not force and CURRENT_SYMBOLS and (now - LAST_SYMBOL_UPDATE_TIME) < SYMBOL_REFRESH_INTERVAL:
+        return CURRENT_SYMBOLS
+
+    print("[SYMBOL UPDATE] Top50 재선정 시작", flush=True)
+    new_symbols = get_final_symbols()
+
+    added = sorted(set(new_symbols) - set(CURRENT_SYMBOLS))
+    removed = sorted(set(CURRENT_SYMBOLS) - set(new_symbols))
+
+    CURRENT_SYMBOLS = new_symbols
+    LAST_SYMBOL_UPDATE_TIME = now
+
+    print(f"[SYMBOL UPDATE] 감시 종목 수={len(CURRENT_SYMBOLS)}", flush=True)
+    if added:
+        print(f"[SYMBOL UPDATE] 추가: {added}", flush=True)
+    if removed:
+        print(f"[SYMBOL UPDATE] 제거: {removed}", flush=True)
+
+    return CURRENT_SYMBOLS
 
 
 def get_kline(symbol: str, interval: str = "5m", limit: int = 40):
@@ -287,6 +322,46 @@ def check_short_signal(
     )
 
 
+def check_long_lead_signal(
+    recent_candle: dict,
+    prev_candle: dict,
+    avg_vol: float,
+    trend_direction: str,
+) -> bool:
+    recent_vol = recent_candle["volume"]
+    recent_change = recent_candle["change_pct"]
+
+    return (
+        avg_vol > 0
+        and trend_direction != "SHORT"
+        and recent_vol > avg_vol * LEAD_VOL_MULTIPLIER
+        and recent_change > LEAD_MIN_CHANGE
+        and is_valid_trend_candle(recent_candle, "LONG")
+        and prev_candle["change_pct"] > -LEAD_PREV_MAX_OPPOSITE
+        and prev_candle["body_ratio"] >= 0.25
+    )
+
+
+def check_short_lead_signal(
+    recent_candle: dict,
+    prev_candle: dict,
+    avg_vol: float,
+    trend_direction: str,
+) -> bool:
+    recent_vol = recent_candle["volume"]
+    recent_change = recent_candle["change_pct"]
+
+    return (
+        avg_vol > 0
+        and trend_direction != "LONG"
+        and recent_vol > avg_vol * LEAD_VOL_MULTIPLIER
+        and recent_change < -LEAD_MIN_CHANGE
+        and is_valid_trend_candle(recent_candle, "SHORT")
+        and prev_candle["change_pct"] < LEAD_PREV_MAX_OPPOSITE
+        and prev_candle["body_ratio"] >= 0.25
+    )
+
+
 def analyze_symbol(symbol: str) -> Optional[dict]:
     data_5m = get_kline(symbol, interval=SIGNAL_INTERVAL_5M, limit=40)
     data_15m = get_kline(symbol, interval=TREND_INTERVAL_15M, limit=20)
@@ -311,6 +386,8 @@ def analyze_symbol(symbol: str) -> Optional[dict]:
     trend_direction = get_trend_direction_15m(closes_15m)
     is_long = check_long_signal(recent_candle, prev_candle, avg_vol, trend_direction)
     is_short = check_short_signal(recent_candle, prev_candle, avg_vol, trend_direction)
+    is_lead_long = False if is_long else check_long_lead_signal(recent_candle, prev_candle, avg_vol, trend_direction)
+    is_lead_short = False if is_short else check_short_lead_signal(recent_candle, prev_candle, avg_vol, trend_direction)
 
     total_change = recent_candle["change_pct"] + prev_candle["change_pct"]
 
@@ -331,6 +408,8 @@ def analyze_symbol(symbol: str) -> Optional[dict]:
         "prev_range_pct": prev_candle["range_pct"],
         "is_long": is_long,
         "is_short": is_short,
+        "is_lead_long": is_lead_long,
+        "is_lead_short": is_lead_short,
     }
 
 
@@ -350,6 +429,7 @@ def send_signal_alert(analysis: dict) -> None:
         last_alert_time[key] = now
         send_telegram(
             f"{symbol} 🚀 LONG 신호\n"
+            f"모드: 확정 진입\n"
             f"15분 방향: {analysis['trend_direction']}\n"
             f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
             f"이전 5분 변동률: {analysis['prev_change']:.2f}%\n"
@@ -373,6 +453,7 @@ def send_signal_alert(analysis: dict) -> None:
         last_alert_time[key] = now
         send_telegram(
             f"{symbol} 🔻 SHORT 신호\n"
+            f"모드: 확정 진입\n"
             f"15분 방향: {analysis['trend_direction']}\n"
             f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
             f"이전 5분 변동률: {analysis['prev_change']:.2f}%\n"
@@ -381,6 +462,50 @@ def send_signal_alert(analysis: dict) -> None:
             f"이전 거래량: {analysis['prev_vol']:.2f}\n"
             f"평균 거래량: {analysis['avg_vol']:.2f}\n"
             f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 이전 몸통비율: {analysis['prev_body_ratio']:.2f}"
+        )
+        return
+
+    if analysis["is_lead_long"]:
+        key = get_cooldown_key(symbol, "LONG", prefix="lead_signal")
+        if key in last_alert_time and (now - last_alert_time[key] < SIGNAL_COOLDOWN):
+            print(f"{symbol} | 선행 LONG 쿨다운 중", flush=True)
+            return
+        if is_opposite_direction_locked(symbol, "LONG", prefix="signal") or is_opposite_direction_locked(symbol, "LONG", prefix="lead_signal"):
+            print(f"{symbol} | SHORT 알림 직후라 선행 LONG 잠금", flush=True)
+            return
+
+        last_alert_time[key] = now
+        send_telegram(
+            f"{symbol} ⚡ 선행 LONG 신호\n"
+            f"모드: 시작 직후 진입\n"
+            f"15분 방향: {analysis['trend_direction']}\n"
+            f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
+            f"최근 거래량: {analysis['recent_vol']:.2f}\n"
+            f"이전 거래량: {analysis['prev_vol']:.2f}\n"
+            f"평균 거래량: {analysis['avg_vol']:.2f}\n"
+            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 종가위치: {analysis['recent_close_pos']:.2f}"
+        )
+        return
+
+    if analysis["is_lead_short"]:
+        key = get_cooldown_key(symbol, "SHORT", prefix="lead_signal")
+        if key in last_alert_time and (now - last_alert_time[key] < SIGNAL_COOLDOWN):
+            print(f"{symbol} | 선행 SHORT 쿨다운 중", flush=True)
+            return
+        if is_opposite_direction_locked(symbol, "SHORT", prefix="signal") or is_opposite_direction_locked(symbol, "SHORT", prefix="lead_signal"):
+            print(f"{symbol} | LONG 알림 직후라 선행 SHORT 잠금", flush=True)
+            return
+
+        last_alert_time[key] = now
+        send_telegram(
+            f"{symbol} ⚡ 선행 SHORT 신호\n"
+            f"모드: 시작 직후 진입\n"
+            f"15분 방향: {analysis['trend_direction']}\n"
+            f"최근 5분 변동률: {analysis['recent_change']:.2f}%\n"
+            f"최근 거래량: {analysis['recent_vol']:.2f}\n"
+            f"이전 거래량: {analysis['prev_vol']:.2f}\n"
+            f"평균 거래량: {analysis['avg_vol']:.2f}\n"
+            f"최근 몸통비율: {analysis['recent_body_ratio']:.2f} / 종가위치: {analysis['recent_close_pos']:.2f}"
         )
 
 
@@ -402,11 +527,17 @@ def check_signal(symbol: str) -> None:
             flush=True,
         )
         print(
-            f"[DEBUG] {symbol} | long={analysis['is_long']} | short={analysis['is_short']}",
+            f"[DEBUG] {symbol} | long={analysis['is_long']} | short={analysis['is_short']} | "
+            f"lead_long={analysis['is_lead_long']} | lead_short={analysis['is_lead_short']}",
             flush=True,
         )
 
-        if not analysis["is_long"] and not analysis["is_short"]:
+        if not any([
+            analysis["is_long"],
+            analysis["is_short"],
+            analysis["is_lead_long"],
+            analysis["is_lead_short"],
+        ]):
             return
 
         send_signal_alert(analysis)
@@ -587,8 +718,8 @@ def signal_loop() -> None:
             print("=" * 60, flush=True)
             print(f"[SIGNAL LOOP START] {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
 
-            symbols = get_final_symbols()
-            print(f"최종 감시 종목: {symbols}", flush=True)
+            symbols = update_symbols_if_needed()
+            print(f"최종 감시 종목({len(symbols)}개): {symbols}", flush=True)
 
             if not symbols:
                 print("감시 종목 없음", flush=True)
@@ -640,6 +771,11 @@ def health():
 
 def start_background_loops() -> None:
     global spot_loop_started, onchain_loop_started
+
+    try:
+        update_symbols_if_needed(force=True)
+    except Exception as e:
+        print(f"초기 종목 로딩 실패: {e}", flush=True)
 
     if not spot_loop_started:
         spot_loop_started = True
