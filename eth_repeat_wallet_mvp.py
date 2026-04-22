@@ -10,7 +10,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import requests
 
@@ -62,6 +62,23 @@ HUB_MIN_SCORE_FOR_ALERT = 18
 OUTFLOW_MIN_SHARED_FOR_ALERT = 3
 OUTFLOW_MIN_SCORE_FOR_ALERT = 18
 
+# flow 추적 관련 기본값
+FLOW_MIN_SHARED_FOR_EXPANSION = 2
+FLOW_MIN_SCORE_FOR_EXPANSION = 12
+FLOW_MIN_AMOUNT_RATIO = 0.60
+FLOW_MAX_NEXT_EDGES = 12
+FLOW_MAX_TRACK_ADDRS = 30
+FLOW_ALERT_EXCHANGE_ONLY_DEFAULT = True
+
+# active hub watcher 기본값
+ACTIVE_HUB_MIN_SHARED = 2
+ACTIVE_HUB_MIN_SCORE = 12
+ACTIVE_HUB_TTL_HOURS = 168  # 7일
+ACTIVE_HUB_MAX_TRACK = 40
+ACTIVE_HUB_SCAN_MAX_PAGES = 3
+ACTIVE_HUB_MIN_OUTGOING_COUNT_FOR_B = 2
+ACTIVE_HUB_BURST_WINDOW_HOURS = 12
+
 
 @dataclass
 class Transfer:
@@ -107,6 +124,15 @@ def format_token_amount(value_raw: str, token_decimal: int) -> str:
         return f"{value:.8f}".rstrip("0").rstrip(".")
     except Exception:
         return value_raw
+
+
+def amount_as_float(value_raw: str, token_decimal: int) -> float:
+    try:
+        value_int = int(value_raw)
+        decimals = max(int(token_decimal or 0), 0)
+        return value_int / (10 ** decimals) if decimals else float(value_int)
+    except Exception:
+        return 0.0
 
 
 def classify_address(addr: str) -> Tuple[str, str]:
@@ -156,6 +182,26 @@ def ensure_db(conn: sqlite3.Connection) -> None:
             alert_key TEXT PRIMARY KEY,
             alert_type TEXT NOT NULL,
             created_at INTEGER NOT NULL
+        )
+        '''
+    )
+    cur.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS active_hubs (
+            address TEXT PRIMARY KEY,
+            chainid TEXT NOT NULL,
+            source_seeds TEXT NOT NULL,
+            shared_seed_count INTEGER NOT NULL,
+            score INTEGER NOT NULL,
+            target_kind TEXT,
+            target_label TEXT,
+            first_seen_at INTEGER NOT NULL,
+            activated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            last_checked_at INTEGER,
+            last_outgoing_at INTEGER,
+            notes TEXT
         )
         '''
     )
@@ -291,9 +337,9 @@ def save_transfers(conn: sqlite3.Connection, transfers: Iterable[Transfer]) -> i
     return count
 
 
-def collect_for_seed(
+def collect_for_address(
     conn: sqlite3.Connection,
-    seed: str,
+    address: str,
     chainid: str,
     days: int,
     offset: int,
@@ -306,14 +352,14 @@ def collect_for_seed(
     for page in range(1, max_pages + 1):
         try:
             transfers = fetch_erc20_transfers(
-                address=seed,
+                address=address,
                 chainid=chainid,
                 page=page,
                 offset=offset,
                 sort="desc",
             )
         except Exception as e:
-            print(f"[WARN] fetch 실패 seed={seed} page={page}: {e}")
+            print(f"[WARN] fetch 실패 address={address} page={page}: {e}")
             break
 
         if not transfers:
@@ -331,6 +377,18 @@ def collect_for_seed(
         time.sleep(sleep_sec)
 
     return total_saved
+
+
+def collect_for_seed(
+    conn: sqlite3.Connection,
+    seed: str,
+    chainid: str,
+    days: int,
+    offset: int,
+    max_pages: int,
+    sleep_sec: float,
+) -> int:
+    return collect_for_address(conn, seed, chainid, days, offset, max_pages, sleep_sec)
 
 
 def find_exchange_hits(
@@ -567,6 +625,7 @@ def get_seed_outflow_details(
 
             outflows.append(
                 {
+                    "timestamp": int(timestamp),
                     "time_utc": datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                     "seed": seed,
                     "seed_short": shorten(seed),
@@ -575,7 +634,8 @@ def get_seed_outflow_details(
                     "token_symbol": token_symbol or "-",
                     "token_name": token_name or "-",
                     "amount": format_token_amount(value_raw, token_decimal),
-                    "contract_address": contract_address,
+                    "amount_float": amount_as_float(value_raw, token_decimal),
+                    "contract_address": normalize(contract_address or ""),
                     "tx_hash": tx_hash,
                     "target_kind": target_kind,
                     "target_label": target_label or "-",
@@ -590,7 +650,7 @@ def get_seed_outflow_details(
                 }
             )
 
-    outflows.sort(key=lambda x: (x["time_utc"], x["seed"], x["to_addr"]), reverse=True)
+    outflows.sort(key=lambda x: (x["timestamp"], x["seed"], x["to_addr"]), reverse=True)
     return outflows
 
 
@@ -686,10 +746,8 @@ def send_hub_candidate_alerts(conn: sqlite3.Connection, hub_rows: List[dict]) ->
 
         if row["address"] in IGNORE_ADDRESSES:
             continue
-        # 단순 protocol 허브는 텔레그램으로 쏘지 않음
         if target_kind == "protocol" and exchange == "-":
             continue
-        # 강한 exchange / 강한 허브만
         if exchange == "-" and not (shared >= HUB_MIN_SHARED_FOR_ALERT and score >= HUB_MIN_SCORE_FOR_ALERT):
             continue
 
@@ -742,14 +800,11 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
         should_alert = False
         alert_type = ""
 
-        # 실전형: 거래소 직행만 즉시 알림
         if exchange != "-":
             should_alert = True
             alert_type = "outflow_exchange"
-        # protocol/DEX 단독은 알림 금지 (차트 결합에서만 사용)
         elif target_kind == "protocol":
             should_alert = False
-        # strong hub만 제한적으로 허용
         elif is_hub and shared >= OUTFLOW_MIN_SHARED_FOR_ALERT and score >= OUTFLOW_MIN_SCORE_FOR_ALERT:
             should_alert = True
             alert_type = "outflow_hub"
@@ -792,8 +847,643 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
     print(f"[TG] 출금 상세 알림 전송 수: {sent_count}", flush=True)
 
 
+# -----------------------------
+# flow tracking
+# -----------------------------
+
+def get_recent_outgoing_transfers(
+    conn: sqlite3.Connection,
+    wallet: str,
+    chainid: str,
+    days: int,
+) -> List[dict]:
+    cutoff = utc_now_ts() - days * 86400
+    cur = conn.cursor()
+    rows = cur.execute(
+        '''
+        SELECT timestamp, tx_hash, from_addr, to_addr, token_symbol, token_name,
+               contract_address, value_raw, token_decimal
+        FROM transfers
+        WHERE chainid = ?
+          AND timestamp >= ?
+          AND wallet = ?
+          AND from_addr = ?
+        ORDER BY timestamp DESC
+        ''',
+        (chainid, cutoff, normalize(wallet), normalize(wallet)),
+    ).fetchall()
+
+    out: List[dict] = []
+    for (
+        timestamp,
+        tx_hash,
+        from_addr,
+        to_addr,
+        token_symbol,
+        token_name,
+        contract_address,
+        value_raw,
+        token_decimal,
+    ) in rows:
+        to_addr = normalize(to_addr)
+        kind, label = classify_address(to_addr)
+        out.append(
+            {
+                "timestamp": int(timestamp),
+                "time_utc": datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "tx_hash": tx_hash,
+                "from_addr": normalize(from_addr),
+                "to_addr": to_addr,
+                "token_symbol": token_symbol or "-",
+                "token_name": token_name or "-",
+                "contract_address": normalize(contract_address or ""),
+                "value_raw": value_raw or "0",
+                "token_decimal": int(token_decimal or 0),
+                "amount_float": amount_as_float(value_raw or "0", int(token_decimal or 0)),
+                "amount": format_token_amount(value_raw or "0", int(token_decimal or 0)),
+                "target_kind": kind,
+                "target_label": label or "-",
+            }
+        )
+    return out
+
+
+def select_flow_expansion_addresses(
+    seeds: List[str],
+    hub_rows: List[dict],
+    outflow_rows: List[dict],
+    max_track_addrs: int,
+) -> List[str]:
+    seeds_set = {normalize(s) for s in seeds}
+    candidate_map = {normalize(r["address"]): r for r in hub_rows}
+    selected: List[str] = []
+    seen: Set[str] = set()
+
+    for row in outflow_rows:
+        to_addr = normalize(row["to_addr"])
+        kind, _ = classify_address(to_addr)
+        if to_addr in seeds_set or to_addr in seen:
+            continue
+        if kind in {"ignore", "exchange"}:
+            continue
+        hub = candidate_map.get(to_addr)
+        if hub:
+            shared = int(hub.get("shared_seed_count") or 0)
+            score = int(hub.get("score") or 0)
+            if shared >= FLOW_MIN_SHARED_FOR_EXPANSION or score >= FLOW_MIN_SCORE_FOR_EXPANSION:
+                seen.add(to_addr)
+                selected.append(to_addr)
+        elif row.get("target_kind") == "unknown":
+            seen.add(to_addr)
+            selected.append(to_addr)
+        if len(selected) >= max_track_addrs:
+            return selected
+
+    for row in hub_rows:
+        addr = normalize(row["address"])
+        kind, _ = classify_address(addr)
+        if addr in seeds_set or addr in seen:
+            continue
+        if kind in {"ignore", "exchange", "protocol"}:
+            continue
+        shared = int(row.get("shared_seed_count") or 0)
+        score = int(row.get("score") or 0)
+        if shared >= FLOW_MIN_SHARED_FOR_EXPANSION or score >= FLOW_MIN_SCORE_FOR_EXPANSION:
+            seen.add(addr)
+            selected.append(addr)
+        if len(selected) >= max_track_addrs:
+            break
+
+    return selected
+
+
+def collect_for_flow_expansion(
+    conn: sqlite3.Connection,
+    addresses: List[str],
+    chainid: str,
+    days: int,
+    offset: int,
+    max_pages: int,
+    sleep_sec: float,
+) -> int:
+    total_saved = 0
+    for idx, addr in enumerate(addresses, start=1):
+        print(f"[FLOW] ({idx}/{len(addresses)}) 확장 수집: {addr}")
+        total_saved += collect_for_address(
+            conn=conn,
+            address=addr,
+            chainid=chainid,
+            days=days,
+            offset=offset,
+            max_pages=max_pages,
+            sleep_sec=sleep_sec,
+        )
+    return total_saved
+
+
+def build_flow_paths(
+    conn: sqlite3.Connection,
+    seeds: List[str],
+    chainid: str,
+    days: int,
+    max_hops: int = 3,
+    max_time_gap_hours: int = 24,
+    min_amount_ratio: float = FLOW_MIN_AMOUNT_RATIO,
+    max_next_edges: int = FLOW_MAX_NEXT_EDGES,
+) -> List[dict]:
+    if max_hops < 2:
+        return []
+
+    cutoff = utc_now_ts() - days * 86400
+    max_gap_sec = max_time_gap_hours * 3600
+    visited_alert_keys: Set[str] = set()
+    results: List[dict] = []
+
+    def candidate_next_edges(current_wallet: str, prev_edge: dict) -> List[dict]:
+        rows = get_recent_outgoing_transfers(conn, current_wallet, chainid, days)
+        out: List[dict] = []
+        for row in rows:
+            if row["timestamp"] < prev_edge["timestamp"]:
+                continue
+            if row["timestamp"] - prev_edge["timestamp"] > max_gap_sec:
+                continue
+            if normalize(row["contract_address"]) != normalize(prev_edge["contract_address"]):
+                continue
+            if normalize(row["token_symbol"]) != normalize(prev_edge["token_symbol"]):
+                continue
+            prev_amt = float(prev_edge.get("amount_float") or 0.0)
+            curr_amt = float(row.get("amount_float") or 0.0)
+            if prev_amt > 0 and curr_amt < prev_amt * min_amount_ratio:
+                continue
+            out.append(row)
+            if len(out) >= max_next_edges:
+                break
+        return out
+
+    seeds_norm = [normalize(s) for s in seeds]
+    for seed in seeds_norm:
+        first_edges = get_recent_outgoing_transfers(conn, seed, chainid, days)
+        for edge1 in first_edges:
+            if edge1["timestamp"] < cutoff:
+                continue
+            if edge1["to_addr"] in IGNORE_ADDRESSES:
+                continue
+
+            chain_edges = [dict(edge1, hop=1, hop_from=seed, hop_to=edge1["to_addr"])]
+            if edge1["target_kind"] == "exchange":
+                continue
+
+            frontier = [(edge1["to_addr"], chain_edges, edge1, 2)]
+            while frontier:
+                current_wallet, path_edges, prev_edge, next_hop = frontier.pop(0)
+                if next_hop > max_hops:
+                    continue
+                for nxt in candidate_next_edges(current_wallet, prev_edge):
+                    nxt_addr = normalize(nxt["to_addr"])
+                    if nxt_addr in {normalize(e["hop_from"]) for e in path_edges}:
+                        continue
+                    new_path = path_edges + [dict(nxt, hop=next_hop, hop_from=current_wallet, hop_to=nxt_addr)]
+                    if nxt["target_kind"] == "exchange":
+                        alert_key = make_alert_key(
+                            "flow_exchange",
+                            seed,
+                            new_path[0]["tx_hash"],
+                            nxt["tx_hash"],
+                            nxt["contract_address"],
+                            nxt_addr,
+                        )
+                        if alert_key in visited_alert_keys:
+                            continue
+                        visited_alert_keys.add(alert_key)
+                        results.append(
+                            {
+                                "seed": seed,
+                                "start_time_utc": new_path[0]["time_utc"],
+                                "end_time_utc": new_path[-1]["time_utc"],
+                                "token_symbol": new_path[0]["token_symbol"],
+                                "token_name": new_path[0]["token_name"],
+                                "contract_address": new_path[0]["contract_address"],
+                                "start_amount": new_path[0]["amount"],
+                                "end_amount": new_path[-1]["amount"],
+                                "hop_count": len(new_path),
+                                "exchange": nxt["target_label"],
+                                "path": " -> ".join(shorten(e["hop_from"]) for e in new_path) + f" -> {shorten(new_path[-1]['hop_to'])}",
+                                "path_addresses": " -> ".join([e["hop_from"] for e in new_path] + [new_path[-1]["hop_to"]]),
+                                "first_tx_hash": new_path[0]["tx_hash"],
+                                "last_tx_hash": new_path[-1]["tx_hash"],
+                                "duration_min": max(0, int((new_path[-1]["timestamp"] - new_path[0]["timestamp"]) / 60)),
+                            }
+                        )
+                    else:
+                        if next_hop < max_hops and nxt["target_kind"] != "protocol":
+                            frontier.append((nxt_addr, new_path, nxt, next_hop + 1))
+
+    results.sort(key=lambda x: (x["end_time_utc"], x["hop_count"], x["exchange"]), reverse=True)
+    return results
+
+
+def print_flow_paths(rows: List[dict], top: int = 20) -> None:
+    print("\n=== flow 추적 결과 (거래소 도착) ===")
+    if not rows:
+        print("(없음)")
+        return
+    for row in rows[:top]:
+        print(
+            f"{row['end_time_utc']} | seed={shorten(row['seed'])} | token={row['token_symbol']} | "
+            f"hops={row['hop_count']} | exchange={row['exchange']} | dur={row['duration_min']}m | {row['path']}"
+        )
+
+
+def send_flow_alerts(conn: sqlite3.Connection, flow_rows: List[dict]) -> None:
+    print("\n=== 온체인 텔레그램 알림: flow exchange only ===")
+    sent_count = 0
+    for row in flow_rows:
+        alert_key = make_alert_key(
+            "flow_exchange",
+            row["seed"],
+            row["first_tx_hash"],
+            row["last_tx_hash"],
+            row["contract_address"],
+            row["exchange"],
+        )
+        if has_sent_alert(conn, alert_key):
+            continue
+
+        msg = (
+            "[ONCHAIN] FLOW 거래소 도착 감지\n"
+            f"seed: {shorten(row['seed'])}\n"
+            f"token: {row['token_symbol']}\n"
+            f"start_amt: {row['start_amount']}\n"
+            f"end_amt: {row['end_amount']}\n"
+            f"hops: {row['hop_count']}\n"
+            f"exchange: {row['exchange']}\n"
+            f"dur_min: {row['duration_min']}\n"
+            f"path: {row['path']}"
+        )
+
+        if send_telegram_message(msg):
+            mark_alert_sent(conn, alert_key, "flow_exchange")
+            sent_count += 1
+
+    print(f"[TG] flow 거래소 도착 알림 전송 수: {sent_count}", flush=True)
+
+
+# -----------------------------
+# active hub watcher
+# -----------------------------
+
+def expire_old_active_hubs(conn: sqlite3.Connection, chainid: str) -> int:
+    cur = conn.cursor()
+    cur.execute(
+        '''
+        UPDATE active_hubs
+        SET status = 'expired'
+        WHERE chainid = ?
+          AND status = 'active'
+          AND expires_at <= ?
+        ''',
+        (chainid, utc_now_ts()),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def activate_hubs_from_candidates(
+    conn: sqlite3.Connection,
+    hub_rows: List[dict],
+    chainid: str,
+    ttl_hours: int,
+    min_shared: int,
+    min_score: int,
+) -> int:
+    now = utc_now_ts()
+    expires_at = now + ttl_hours * 3600
+    cur = conn.cursor()
+    activated = 0
+
+    for row in hub_rows:
+        address = normalize(row["address"])
+        shared = int(row.get("shared_seed_count") or 0)
+        score = int(row.get("score") or 0)
+        target_kind = row.get("target_kind") or "unknown"
+        if address in IGNORE_ADDRESSES:
+            continue
+        if target_kind in {"ignore", "exchange", "protocol"}:
+            continue
+        if shared < min_shared or score < min_score:
+            continue
+
+        prev = cur.execute(
+            "SELECT address FROM active_hubs WHERE address = ? AND chainid = ?",
+            (address, chainid),
+        ).fetchone()
+
+        cur.execute(
+            '''
+            INSERT INTO active_hubs
+            (address, chainid, source_seeds, shared_seed_count, score, target_kind, target_label,
+             first_seen_at, activated_at, expires_at, status, last_checked_at, last_outgoing_at, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?)
+            ON CONFLICT(address) DO UPDATE SET
+                chainid=excluded.chainid,
+                source_seeds=excluded.source_seeds,
+                shared_seed_count=excluded.shared_seed_count,
+                score=excluded.score,
+                target_kind=excluded.target_kind,
+                target_label=excluded.target_label,
+                expires_at=CASE
+                    WHEN active_hubs.status='expired' THEN excluded.expires_at
+                    ELSE MAX(active_hubs.expires_at, excluded.expires_at)
+                END,
+                status='active',
+                notes=excluded.notes
+            ''',
+            (
+                address,
+                chainid,
+                row.get("seeds", ""),
+                shared,
+                score,
+                target_kind,
+                row.get("target_label") or row.get("label") or "",
+                now,
+                now,
+                expires_at,
+                f"shared={shared},score={score}",
+            ),
+        )
+        if prev is None:
+            activated += 1
+
+    conn.commit()
+    return activated
+
+
+def get_active_hubs(conn: sqlite3.Connection, chainid: str, limit: int) -> List[dict]:
+    cur = conn.cursor()
+    rows = cur.execute(
+        '''
+        SELECT address, source_seeds, shared_seed_count, score, target_kind, target_label,
+               first_seen_at, activated_at, expires_at, status, last_checked_at, last_outgoing_at, notes
+        FROM active_hubs
+        WHERE chainid = ? AND status = 'active'
+        ORDER BY score DESC, shared_seed_count DESC, activated_at DESC
+        LIMIT ?
+        ''',
+        (chainid, limit),
+    ).fetchall()
+
+    out = []
+    for r in rows:
+        out.append(
+            {
+                "address": normalize(r[0]),
+                "source_seeds": r[1] or "",
+                "shared_seed_count": int(r[2] or 0),
+                "score": int(r[3] or 0),
+                "target_kind": r[4] or "unknown",
+                "target_label": r[5] or "-",
+                "first_seen_at": int(r[6] or 0),
+                "activated_at": int(r[7] or 0),
+                "expires_at": int(r[8] or 0),
+                "status": r[9] or "active",
+                "last_checked_at": int(r[10] or 0) if r[10] is not None else None,
+                "last_outgoing_at": int(r[11] or 0) if r[11] is not None else None,
+                "notes": r[12] or "",
+            }
+        )
+    return out
+
+
+def collect_for_active_hubs(
+    conn: sqlite3.Connection,
+    active_hubs: List[dict],
+    chainid: str,
+    days: int,
+    offset: int,
+    max_pages: int,
+    sleep_sec: float,
+) -> int:
+    total_saved = 0
+    for idx, hub in enumerate(active_hubs, start=1):
+        print(f"[HUB] ({idx}/{len(active_hubs)}) 활성 허브 수집: {hub['address']}")
+        total_saved += collect_for_address(
+            conn=conn,
+            address=hub["address"],
+            chainid=chainid,
+            days=days,
+            offset=offset,
+            max_pages=max_pages,
+            sleep_sec=sleep_sec,
+        )
+    return total_saved
+
+
+def touch_active_hub_checked(
+    conn: sqlite3.Connection,
+    chainid: str,
+    address: str,
+    last_outgoing_at: Optional[int] = None,
+) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        '''
+        UPDATE active_hubs
+        SET last_checked_at = ?,
+            last_outgoing_at = CASE
+                WHEN ? IS NULL THEN last_outgoing_at
+                ELSE MAX(COALESCE(last_outgoing_at, 0), ?)
+            END
+        WHERE chainid = ? AND address = ?
+        ''',
+        (utc_now_ts(), last_outgoing_at, last_outgoing_at, chainid, normalize(address)),
+    )
+    conn.commit()
+
+
+def scan_active_hub_outflows(
+    conn: sqlite3.Connection,
+    active_hubs: List[dict],
+    chainid: str,
+    days: int,
+    burst_window_hours: int,
+    min_outgoing_count_for_b: int,
+) -> List[dict]:
+    burst_window_sec = burst_window_hours * 3600
+    results: List[dict] = []
+
+    for hub in active_hubs:
+        address = normalize(hub["address"])
+        rows = get_recent_outgoing_transfers(conn, address, chainid, days)
+        if not rows:
+            touch_active_hub_checked(conn, chainid, address, None)
+            continue
+
+        last_seen = hub.get("last_outgoing_at") or 0
+        fresh_rows = [r for r in rows if int(r["timestamp"]) > int(last_seen)]
+        newest_ts = max(int(r["timestamp"]) for r in rows)
+        touch_active_hub_checked(conn, chainid, address, newest_ts)
+
+        if not fresh_rows:
+            continue
+
+        exchange_rows = [r for r in fresh_rows if r["target_kind"] == "exchange"]
+        non_protocol_rows = [r for r in fresh_rows if r["target_kind"] not in {"protocol", "ignore"}]
+        recent_burst_rows = [
+            r for r in non_protocol_rows
+            if newest_ts - int(r["timestamp"]) <= burst_window_sec
+        ]
+        unique_targets = sorted({normalize(r["to_addr"]) for r in recent_burst_rows})
+        token_counter = collections.Counter(
+            normalize(r["token_symbol"]) for r in recent_burst_rows if (r.get("token_symbol") or "-") != "-"
+        )
+        top_token = token_counter.most_common(1)[0][0].upper() if token_counter else "-"
+        total_amount = sum(float(r.get("amount_float") or 0.0) for r in recent_burst_rows)
+
+        if exchange_rows:
+            for row in exchange_rows:
+                results.append(
+                    {
+                        "level": "A",
+                        "hub": address,
+                        "shared_seed_count": hub["shared_seed_count"],
+                        "score": hub["score"],
+                        "source_seeds": hub["source_seeds"],
+                        "time_utc": row["time_utc"],
+                        "timestamp": row["timestamp"],
+                        "token_symbol": row["token_symbol"],
+                        "amount": row["amount"],
+                        "amount_float": row["amount_float"],
+                        "to_addr": row["to_addr"],
+                        "to_label": row["target_label"],
+                        "target_kind": row["target_kind"],
+                        "tx_hash": row["tx_hash"],
+                        "recent_outgoing_count": len(recent_burst_rows),
+                        "unique_target_count": len(unique_targets),
+                        "top_token": top_token,
+                        "burst_total_amount": total_amount,
+                        "note": "active hub -> exchange",
+                    }
+                )
+
+        elif len(unique_targets) >= min_outgoing_count_for_b and len(recent_burst_rows) >= min_outgoing_count_for_b:
+            results.append(
+                {
+                    "level": "B",
+                    "hub": address,
+                    "shared_seed_count": hub["shared_seed_count"],
+                    "score": hub["score"],
+                    "source_seeds": hub["source_seeds"],
+                    "time_utc": datetime.fromtimestamp(newest_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "timestamp": newest_ts,
+                    "token_symbol": top_token,
+                    "amount": format_token_amount(str(int(total_amount * 10000)), 4) if total_amount > 0 else "0",
+                    "amount_float": total_amount,
+                    "to_addr": ",".join(shorten(a) for a in unique_targets[:5]),
+                    "to_label": "-",
+                    "target_kind": "unknown",
+                    "tx_hash": recent_burst_rows[0]["tx_hash"],
+                    "recent_outgoing_count": len(recent_burst_rows),
+                    "unique_target_count": len(unique_targets),
+                    "top_token": top_token,
+                    "burst_total_amount": total_amount,
+                    "note": "active hub burst outflows",
+                }
+            )
+
+    results.sort(key=lambda x: (x["timestamp"], x["level"], x["score"]), reverse=True)
+    return results
+
+
+def print_active_hub_scan(rows: List[dict], top: int = 20) -> None:
+    print("\n=== active hub 감시 결과 ===")
+    if not rows:
+        print("(없음)")
+        return
+    for row in rows[:top]:
+        print(
+            f"{row['time_utc']} | level={row['level']} | hub={shorten(row['hub'])} | "
+            f"token={row['token_symbol']} | score={row['score']} | shared={row['shared_seed_count']} | "
+            f"targets={row['unique_target_count']} | note={row['note']} | to={row['to_addr']}"
+        )
+
+
+def send_active_hub_alerts(conn: sqlite3.Connection, rows: List[dict]) -> None:
+    print("\n=== 온체인 텔레그램 알림: active hub watcher ===")
+    sent_count = 0
+
+    for row in rows:
+        level = row["level"]
+        if level == "A":
+            alert_key = make_alert_key(
+                "active_hub_A",
+                row["hub"],
+                row["tx_hash"],
+                row["to_addr"],
+                row["token_symbol"],
+                row["amount"],
+            )
+            if has_sent_alert(conn, alert_key):
+                continue
+            msg = (
+                "[ONCHAIN][A] 활성 허브 거래소 도착\n"
+                f"hub: {shorten(row['hub'])}\n"
+                f"token: {row['token_symbol']}\n"
+                f"amount: {row['amount']}\n"
+                f"exchange: {row['to_label']}\n"
+                f"score: {row['score']}\n"
+                f"shared: {row['shared_seed_count']}\n"
+                f"source_seeds: {row['source_seeds']}\n"
+                f"time: {row['time_utc']}"
+            )
+            if send_telegram_message(msg):
+                mark_alert_sent(conn, alert_key, "active_hub_A")
+                sent_count += 1
+        elif level == "B":
+            alert_key = make_alert_key(
+                "active_hub_B",
+                row["hub"],
+                row["time_utc"],
+                row["unique_target_count"],
+                row["recent_outgoing_count"],
+                row["top_token"],
+            )
+            if has_sent_alert(conn, alert_key):
+                continue
+            msg = (
+                "[ONCHAIN][B] 활성 허브 연쇄 출금 시작\n"
+                f"hub: {shorten(row['hub'])}\n"
+                f"top_token: {row['top_token']}\n"
+                f"recent_outflows: {row['recent_outgoing_count']}\n"
+                f"unique_targets: {row['unique_target_count']}\n"
+                f"score: {row['score']}\n"
+                f"shared: {row['shared_seed_count']}\n"
+                f"source_seeds: {row['source_seeds']}\n"
+                f"targets: {row['to_addr']}\n"
+                f"time: {row['time_utc']}"
+            )
+            if send_telegram_message(msg):
+                mark_alert_sent(conn, alert_key, "active_hub_B")
+                sent_count += 1
+
+    print(f"[TG] active hub 알림 전송 수: {sent_count}", flush=True)
+
+
+def print_active_hubs_summary(rows: List[dict], top: int = 20) -> None:
+    print("\n=== active hubs ===")
+    if not rows:
+        print("(없음)")
+        return
+    for row in rows[:top]:
+        expires = datetime.fromtimestamp(row["expires_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(
+            f"score={row['score']:>2} | shared={row['shared_seed_count']} | "
+            f"status={row['status']} | expires={expires} | {row['address']}"
+        )
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Etherscan V2 반복 지갑 탐지 MVP (실전형 저노이즈)")
+    parser = argparse.ArgumentParser(description="Etherscan V2 반복 지갑 탐지 MVP + light flow tracker + active hub watcher")
     parser.add_argument("--seeds", required=True, help="시드 주소 txt 파일 경로")
     parser.add_argument("--chainid", default="1", help="EVM chainid. Ethereum=1")
     parser.add_argument("--days", type=int, default=30, help="최근 며칠 데이터 볼지")
@@ -802,6 +1492,24 @@ def main() -> int:
     parser.add_argument("--sleep-sec", type=float, default=0.4, help="API 호출 간 대기")
     parser.add_argument("--top", type=int, default=20, help="상위 몇 개 허브 후보/상세 출력할지")
     parser.add_argument("--csv", default="hub_candidates.csv", help="결과 CSV 파일명")
+
+    parser.add_argument("--enable-flow", action="store_true", help="seed -> hub -> ... -> exchange 흐름 추적 사용")
+    parser.add_argument("--flow-max-hops", type=int, default=3, help="최대 hop 수. 기본 3")
+    parser.add_argument("--flow-max-time-gap-hours", type=int, default=24, help="hop 간 최대 시간 간격(시간)")
+    parser.add_argument("--flow-expand-max-pages", type=int, default=3, help="flow 확장 주소당 최대 페이지 수")
+    parser.add_argument("--flow-max-track-addrs", type=int, default=FLOW_MAX_TRACK_ADDRS, help="확장 추적할 주소 최대 개수")
+    parser.add_argument("--flow-min-amount-ratio", type=float, default=FLOW_MIN_AMOUNT_RATIO, help="이전 hop 대비 최소 금액 비율")
+    parser.add_argument("--alerts-exchange-only", action="store_true", help="텔레그램은 거래소 도착 flow만 전송")
+
+    parser.add_argument("--enable-active-hubs", action="store_true", help="활성 허브 감시 사용")
+    parser.add_argument("--active-hub-ttl-hours", type=int, default=ACTIVE_HUB_TTL_HOURS, help="활성 허브 감시 유지 시간")
+    parser.add_argument("--active-hub-min-shared", type=int, default=ACTIVE_HUB_MIN_SHARED, help="활성 허브 등록 최소 shared")
+    parser.add_argument("--active-hub-min-score", type=int, default=ACTIVE_HUB_MIN_SCORE, help="활성 허브 등록 최소 score")
+    parser.add_argument("--active-hub-max-track", type=int, default=ACTIVE_HUB_MAX_TRACK, help="활성 허브 최대 감시 수")
+    parser.add_argument("--active-hub-scan-max-pages", type=int, default=ACTIVE_HUB_SCAN_MAX_PAGES, help="활성 허브 주소당 최대 페이지 수")
+    parser.add_argument("--active-hub-burst-window-hours", type=int, default=ACTIVE_HUB_BURST_WINDOW_HOURS, help="B급 burst 판단 시간 창")
+    parser.add_argument("--active-hub-min-outgoing-count-for-b", type=int, default=ACTIVE_HUB_MIN_OUTGOING_COUNT_FOR_B, help="B급 판단 최소 출금 수")
+
     args = parser.parse_args()
 
     seeds = read_seed_addresses(args.seeds)
@@ -862,11 +1570,116 @@ def main() -> int:
     detail_csv = f"seed_outflows_{args.csv}"
     export_csv(detail_csv, outflow_rows)
 
-    send_hub_candidate_alerts(conn, rows)
-    send_outflow_alerts(conn, outflow_rows)
+    alerts_exchange_only = args.alerts_exchange_only or FLOW_ALERT_EXCHANGE_ONLY_DEFAULT
+    if not alerts_exchange_only:
+        send_hub_candidate_alerts(conn, rows)
+        send_outflow_alerts(conn, outflow_rows)
+    else:
+        print("[INFO] exchange-only 알림 모드: 허브/일반 출금 텔레그램 알림 생략")
+
+    flow_rows: List[dict] = []
+    flow_csv = f"flow_exchange_{args.csv}"
+    if args.enable_flow:
+        flow_track_addresses = select_flow_expansion_addresses(
+            seeds=seeds,
+            hub_rows=rows,
+            outflow_rows=outflow_rows,
+            max_track_addrs=args.flow_max_track_addrs,
+        )
+        print(f"\n[FLOW] 확장 추적 주소 수: {len(flow_track_addresses)}")
+        if flow_track_addresses:
+            expanded_saved = collect_for_flow_expansion(
+                conn=conn,
+                addresses=flow_track_addresses,
+                chainid=args.chainid,
+                days=args.days,
+                offset=args.offset,
+                max_pages=args.flow_expand_max_pages,
+                sleep_sec=args.sleep_sec,
+            )
+            print(f"[FLOW] 확장 수집 신규 저장 전송 수: {expanded_saved}")
+
+            flow_rows = build_flow_paths(
+                conn=conn,
+                seeds=seeds,
+                chainid=args.chainid,
+                days=args.days,
+                max_hops=args.flow_max_hops,
+                max_time_gap_hours=args.flow_max_time_gap_hours,
+                min_amount_ratio=args.flow_min_amount_ratio,
+            )
+            print_flow_paths(flow_rows, top=args.top)
+            export_csv(flow_csv, flow_rows)
+            send_flow_alerts(conn, flow_rows)
+        else:
+            export_csv(flow_csv, flow_rows)
+            print("[FLOW] 확장할 주소가 없습니다.")
+    else:
+        print("[FLOW] 비활성화. --enable-flow 옵션을 주면 seed -> hub -> exchange 추적을 수행합니다.")
+
+    active_hub_rows: List[dict] = []
+    active_hub_scan_rows: List[dict] = []
+    active_hub_csv = f"active_hubs_{args.csv}"
+    active_hub_scan_csv = f"active_hub_events_{args.csv}"
+    if args.enable_active_hubs:
+        expired = expire_old_active_hubs(conn, args.chainid)
+        if expired:
+            print(f"[HUB] 만료 처리 수: {expired}")
+
+        activated = activate_hubs_from_candidates(
+            conn=conn,
+            hub_rows=rows,
+            chainid=args.chainid,
+            ttl_hours=args.active_hub_ttl_hours,
+            min_shared=args.active_hub_min_shared,
+            min_score=args.active_hub_min_score,
+        )
+        print(f"[HUB] 신규 활성 허브 수: {activated}")
+
+        active_hub_rows = get_active_hubs(
+            conn=conn,
+            chainid=args.chainid,
+            limit=args.active_hub_max_track,
+        )
+        print_active_hubs_summary(active_hub_rows, top=args.top)
+        export_csv(active_hub_csv, active_hub_rows)
+
+        if active_hub_rows:
+            expanded_saved = collect_for_active_hubs(
+                conn=conn,
+                active_hubs=active_hub_rows,
+                chainid=args.chainid,
+                days=args.days,
+                offset=args.offset,
+                max_pages=args.active_hub_scan_max_pages,
+                sleep_sec=args.sleep_sec,
+            )
+            print(f"[HUB] 활성 허브 수집 신규 저장 전송 수: {expanded_saved}")
+
+            active_hub_scan_rows = scan_active_hub_outflows(
+                conn=conn,
+                active_hubs=active_hub_rows,
+                chainid=args.chainid,
+                days=args.days,
+                burst_window_hours=args.active_hub_burst_window_hours,
+                min_outgoing_count_for_b=args.active_hub_min_outgoing_count_for_b,
+            )
+            print_active_hub_scan(active_hub_scan_rows, top=args.top)
+            export_csv(active_hub_scan_csv, active_hub_scan_rows)
+            send_active_hub_alerts(conn, active_hub_scan_rows)
+        else:
+            export_csv(active_hub_scan_csv, active_hub_scan_rows)
+            print("[HUB] 활성 허브가 없습니다.")
+    else:
+        print("[HUB] 비활성화. --enable-active-hubs 옵션을 주면 허브를 기억하고 장기 감시합니다.")
 
     print(f"\n[INFO] 결과 CSV 저장: {args.csv}")
     print(f"[INFO] 시드 출금 상세 CSV 저장: {detail_csv}")
+    if args.enable_flow:
+        print(f"[INFO] flow 거래소 도착 CSV 저장: {flow_csv}")
+    if args.enable_active_hubs:
+        print(f"[INFO] active hub 목록 CSV 저장: {active_hub_csv}")
+        print(f"[INFO] active hub 이벤트 CSV 저장: {active_hub_scan_csv}")
     print(f"[INFO] SQLite DB 저장: {DB_PATH}")
 
     conn.close()
