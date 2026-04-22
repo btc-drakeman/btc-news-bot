@@ -1482,6 +1482,66 @@ def print_active_hubs_summary(rows: List[dict], top: int = 20) -> None:
         )
 
 
+
+def run_active_hub_fast_scan_loop(
+    conn: sqlite3.Connection,
+    chainid: str,
+    days: int,
+    active_hub_max_track: int,
+    active_hub_scan_max_pages: int,
+    active_hub_burst_window_hours: int,
+    active_hub_min_outgoing_count_for_b: int,
+    offset: int,
+    sleep_sec: float,
+    interval_minutes: int,
+    iterations: int,
+    active_hub_csv: str,
+    active_hub_scan_csv: str,
+) -> None:
+    if interval_minutes <= 0 or iterations <= 0:
+        return
+
+    print(f"\n[FAST] 활성 허브 빠른 감시 시작: interval={interval_minutes}분, iterations={iterations}")
+    for idx in range(1, iterations + 1):
+        print(f"\n[FAST] ({idx}/{iterations}) 활성 허브 빠른 감시")
+        expired = expire_old_active_hubs(conn, chainid)
+        if expired:
+            print(f"[FAST] 만료 처리 수: {expired}")
+
+        active_hub_rows = get_active_hubs(conn, chainid=chainid, limit=active_hub_max_track)
+        export_csv(active_hub_csv, active_hub_rows)
+
+        if not active_hub_rows:
+            print("[FAST] 활성 허브가 없습니다.")
+        else:
+            expanded_saved = collect_for_active_hubs(
+                conn=conn,
+                active_hubs=active_hub_rows,
+                chainid=chainid,
+                days=days,
+                offset=offset,
+                max_pages=active_hub_scan_max_pages,
+                sleep_sec=sleep_sec,
+            )
+            print(f"[FAST] 활성 허브 수집 신규 저장 전송 수: {expanded_saved}")
+
+            active_hub_scan_rows = scan_active_hub_outflows(
+                conn=conn,
+                active_hubs=active_hub_rows,
+                chainid=chainid,
+                days=days,
+                burst_window_hours=active_hub_burst_window_hours,
+                min_outgoing_count_for_b=active_hub_min_outgoing_count_for_b,
+            )
+            print_active_hub_scan(active_hub_scan_rows, top=min(10, len(active_hub_scan_rows) or 10))
+            export_csv(active_hub_scan_csv, active_hub_scan_rows)
+            send_active_hub_alerts(conn, active_hub_scan_rows)
+
+        if idx < iterations:
+            print(f"[FAST] 다음 빠른 감시까지 {interval_minutes}분 대기")
+            time.sleep(max(1, interval_minutes) * 60)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Etherscan V2 반복 지갑 탐지 MVP + light flow tracker + active hub watcher")
     parser.add_argument("--seeds", required=True, help="시드 주소 txt 파일 경로")
@@ -1509,6 +1569,8 @@ def main() -> int:
     parser.add_argument("--active-hub-scan-max-pages", type=int, default=ACTIVE_HUB_SCAN_MAX_PAGES, help="활성 허브 주소당 최대 페이지 수")
     parser.add_argument("--active-hub-burst-window-hours", type=int, default=ACTIVE_HUB_BURST_WINDOW_HOURS, help="B급 burst 판단 시간 창")
     parser.add_argument("--active-hub-min-outgoing-count-for-b", type=int, default=ACTIVE_HUB_MIN_OUTGOING_COUNT_FOR_B, help="B급 판단 최소 출금 수")
+    parser.add_argument("--active-hub-fast-scan-minutes", type=int, default=0, help="메인 분석 후 활성 허브만 빠르게 다시 감시할 주기(분). 0이면 비활성화")
+    parser.add_argument("--active-hub-fast-iterations", type=int, default=0, help="메인 분석 후 활성 허브 빠른 감시 반복 횟수. 0이면 비활성화")
 
     args = parser.parse_args()
 
@@ -1672,6 +1734,23 @@ def main() -> int:
             print("[HUB] 활성 허브가 없습니다.")
     else:
         print("[HUB] 비활성화. --enable-active-hubs 옵션을 주면 허브를 기억하고 장기 감시합니다.")
+
+    if args.enable_active_hubs and args.active_hub_fast_scan_minutes > 0 and args.active_hub_fast_iterations > 0:
+        run_active_hub_fast_scan_loop(
+            conn=conn,
+            chainid=args.chainid,
+            days=args.days,
+            active_hub_max_track=args.active_hub_max_track,
+            active_hub_scan_max_pages=args.active_hub_scan_max_pages,
+            active_hub_burst_window_hours=args.active_hub_burst_window_hours,
+            active_hub_min_outgoing_count_for_b=args.active_hub_min_outgoing_count_for_b,
+            offset=args.offset,
+            sleep_sec=args.sleep_sec,
+            interval_minutes=args.active_hub_fast_scan_minutes,
+            iterations=args.active_hub_fast_iterations,
+            active_hub_csv=active_hub_csv,
+            active_hub_scan_csv=active_hub_scan_csv,
+        )
 
     print(f"\n[INFO] 결과 CSV 저장: {args.csv}")
     print(f"[INFO] 시드 출금 상세 CSV 저장: {detail_csv}")
