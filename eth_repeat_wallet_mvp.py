@@ -1007,6 +1007,21 @@ def send_telegram_message(msg: str) -> bool:
         return False
 
 
+
+
+def is_initial_onchain_bootstrap(conn: sqlite3.Connection) -> bool:
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT 1 FROM sent_alerts WHERE alert_key = ?",
+        ("__bootstrap_onchain_exchange_only__",),
+    ).fetchone()
+    return row is None
+
+
+def mark_initial_onchain_bootstrap_done(conn: sqlite3.Connection) -> None:
+    mark_alert_sent(conn, "__bootstrap_onchain_exchange_only__", "bootstrap_done")
+
+
 def make_alert_key(*parts: str) -> str:
     raw = "||".join(str(p) for p in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -1061,6 +1076,11 @@ def send_hub_candidate_alerts(conn: sqlite3.Connection, hub_rows: List[dict]) ->
         )
 
         if has_sent_alert(conn, alert_key):
+            continue
+
+        if suppress_initial_backfill:
+            mark_alert_sent(conn, alert_key, "flow_exchange")
+            suppressed_count += 1
             continue
 
         msg = (
@@ -1122,6 +1142,11 @@ def send_outflow_alerts(conn: sqlite3.Connection, outflow_rows: List[dict]) -> N
         )
 
         if has_sent_alert(conn, alert_key):
+            continue
+
+        if suppress_initial_backfill:
+            mark_alert_sent(conn, alert_key, "flow_exchange")
+            suppressed_count += 1
             continue
 
         msg = (
@@ -1398,9 +1423,11 @@ def send_flow_alerts(
     flow_rows: List[dict],
     max_age_hours: int = FLOW_ALERT_MAX_AGE_HOURS_DEFAULT,
     max_alerts_per_run: int = FLOW_MAX_ALERTS_PER_RUN_DEFAULT,
+    suppress_initial_backfill: bool = False,
 ) -> None:
     print("\n=== 온체인 텔레그램 알림: flow exchange only ===")
     sent_count = 0
+    suppressed_count = 0
 
     cutoff_ts = utc_now_ts() - max(0, int(max_age_hours)) * 3600 if max_age_hours > 0 else 0
 
@@ -1452,6 +1479,11 @@ def send_flow_alerts(
         if has_sent_alert(conn, alert_key):
             continue
 
+        if suppress_initial_backfill:
+            mark_alert_sent(conn, alert_key, "flow_exchange")
+            suppressed_count += 1
+            continue
+
         msg = (
             "[ONCHAIN] FLOW 거래소 도착 감지\n"
             f"seed: {shorten(row['seed'])}\n"
@@ -1469,6 +1501,8 @@ def send_flow_alerts(
             sent_count += 1
 
     print(f"[TG] flow 거래소 도착 알림 전송 수: {sent_count}", flush=True)
+    if suppress_initial_backfill:
+        print(f"[TG] flow 초기 백필 억제 수: {suppressed_count}", flush=True)
 
 
 # -----------------------------
@@ -1728,9 +1762,10 @@ def print_active_hub_scan(rows: List[dict], top: int = 20) -> None:
         )
 
 
-def send_active_hub_alerts(conn: sqlite3.Connection, rows: List[dict]) -> None:
+def send_active_hub_alerts(conn: sqlite3.Connection, rows: List[dict], suppress_initial_backfill: bool = False) -> None:
     print("\n=== 온체인 텔레그램 알림: active hub watcher ===")
     sent_count = 0
+    suppressed_count = 0
 
     for row in rows:
         level = row["level"]
@@ -1744,6 +1779,10 @@ def send_active_hub_alerts(conn: sqlite3.Connection, rows: List[dict]) -> None:
                 row["amount"],
             )
             if has_sent_alert(conn, alert_key):
+                continue
+            if suppress_initial_backfill:
+                mark_alert_sent(conn, alert_key, "active_hub_A")
+                suppressed_count += 1
                 continue
             msg = (
                 "[ONCHAIN][A] 활성 허브 거래소 도착\n"
@@ -1762,6 +1801,8 @@ def send_active_hub_alerts(conn: sqlite3.Connection, rows: List[dict]) -> None:
         # B급(연쇄 출금 시작) 알림은 비활성화: 거래소 도착 A급만 전송
 
     print(f"[TG] active hub 알림 전송 수: {sent_count}", flush=True)
+    if suppress_initial_backfill:
+        print(f"[TG] active hub 초기 백필 억제 수: {suppressed_count}", flush=True)
 
 
 def print_active_hubs_summary(rows: List[dict], top: int = 20) -> None:
@@ -1845,7 +1886,7 @@ def run_active_hub_fast_scan_loop(
             )
             print_active_hub_scan(active_hub_scan_rows, top=min(10, len(active_hub_scan_rows) or 10))
             export_csv(active_hub_scan_csv, active_hub_scan_rows)
-            send_active_hub_alerts(conn, active_hub_scan_rows)
+            send_active_hub_alerts(conn, active_hub_scan_rows, suppress_initial_backfill=initial_bootstrap_mode)
 
         if idx < iterations:
             print(f"[FAST] 다음 빠른 감시까지 {interval_minutes}분 대기")
@@ -1900,6 +1941,9 @@ def main() -> int:
     conn = sqlite3.connect(DB_PATH)
     ensure_db(conn)
     seed_exchange_labels(conn)
+    initial_bootstrap_mode = is_initial_onchain_bootstrap(conn)
+    if initial_bootstrap_mode:
+        print("[BOOTSTRAP] 첫 실행 감지: 과거 거래소 유입 알림은 전송하지 않고 기준만 저장합니다.", flush=True)
 
     bootstrap_label_slugs = [x.strip().lower() for x in str(args.bootstrap_exchange_labels or "").split(",") if x.strip()]
     if args.bootstrap_exchange_on_start and bootstrap_label_slugs:
@@ -2017,7 +2061,7 @@ def main() -> int:
             )
             print_flow_paths(flow_rows, top=args.top)
             export_csv(flow_csv, flow_rows)
-            send_flow_alerts(conn, flow_rows, max_age_hours=args.flow_alert_max_age_hours, max_alerts_per_run=args.flow_max_alerts_per_run)
+            send_flow_alerts(conn, flow_rows, max_age_hours=args.flow_alert_max_age_hours, max_alerts_per_run=args.flow_max_alerts_per_run, suppress_initial_backfill=initial_bootstrap_mode)
         else:
             export_csv(flow_csv, flow_rows)
             print("[FLOW] 확장할 주소가 없습니다.")
@@ -2082,7 +2126,7 @@ def main() -> int:
             )
             print_active_hub_scan(active_hub_scan_rows, top=args.top)
             export_csv(active_hub_scan_csv, active_hub_scan_rows)
-            send_active_hub_alerts(conn, active_hub_scan_rows)
+            send_active_hub_alerts(conn, active_hub_scan_rows, suppress_initial_backfill=initial_bootstrap_mode)
         else:
             export_csv(active_hub_scan_csv, active_hub_scan_rows)
             print("[HUB] 활성 허브가 없습니다.")
@@ -2120,6 +2164,10 @@ def main() -> int:
         print(f"[INFO] active hub 이벤트 CSV 저장: {active_hub_scan_csv}")
     print(f"[INFO] address book JSON: {os.path.abspath(args.address_book)}")
     print(f"[INFO] SQLite DB 저장: {DB_PATH}")
+
+    if initial_bootstrap_mode:
+        mark_initial_onchain_bootstrap_done(conn)
+        print("[BOOTSTRAP] 기준 저장 완료: 다음 실행부터 새 거래소 유입만 알림 전송", flush=True)
 
     conn.close()
     return 0
