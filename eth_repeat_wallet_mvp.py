@@ -6,8 +6,10 @@ import collections
 import csv
 import hashlib
 import os
+import json
 import sqlite3
 import time
+import io
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Set, Tuple
@@ -15,10 +17,18 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 import requests
 
 API_URL = "https://api.etherscan.io/v2/api"
+METADATA_API_V1_URL = "https://api-metadata.etherscan.io/v1/api.ashx"
 DB_PATH = "repeat_wallets.db"
 
-# 보수적으로 검증된 주소만 유지
-EXCHANGE_WALLETS = {
+ADDRESS_BOOK_PATH_DEFAULT = "address_book.json"
+ADDRESS_BOOK_RELOAD_SECONDS_DEFAULT = 60
+AUTO_EXCHANGE_ENRICH_LIMIT_DEFAULT = 25
+AUTO_EXCHANGE_ENRICH_CACHE_HOURS_DEFAULT = 24 * 7
+BOOTSTRAP_EXCHANGE_LABEL_SLUGS_DEFAULT = [
+    "binance", "coinbase", "kraken", "bybit", "okx", "bitfinex", "kucoin", "htx", "huobi"
+]
+
+DEFAULT_EXCHANGE_WALLETS = {
     # BINANCE
     "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be": "BINANCE",
     "0x28c6c06298d514db089934071355e5743bf21d60": "BINANCE",
@@ -38,7 +48,7 @@ EXCHANGE_WALLETS = {
     "0x742d35cc6634c0532925a3b844bc454e4438f44e": "BITFINEX",
 }
 
-ROUTER_OR_PROTOCOL_ADDRESSES = {
+DEFAULT_ROUTER_OR_PROTOCOL_ADDRESSES = {
     "0x000000000004444c5dc75cb358380d2e3de08a90": "UNISWAP_V4_POOL_MANAGER",
     "0xe592427a0aece92de3edee1f18e0157c05861564": "UNISWAP_V3_ROUTER",
     "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45": "UNISWAP_V3_ROUTER_2",
@@ -47,8 +57,23 @@ ROUTER_OR_PROTOCOL_ADDRESSES = {
     "0x5e1f62dac767b0491e3ce72469c217365d5b48cc": "OKX_DEX_ROUTER",
 }
 
-IGNORE_ADDRESSES = {
+DEFAULT_IGNORE_ADDRESSES = {
     "0x0000000000000000000000000000000000000000",
+}
+
+EXCHANGE_WALLETS: Dict[str, str] = {}
+ROUTER_OR_PROTOCOL_ADDRESSES: Dict[str, str] = {}
+IGNORE_ADDRESSES: Set[str] = set()
+ADDRESS_BOOK_STATE = {
+    "path": None,
+    "last_mtime": None,
+    "last_loaded_at": 0.0,
+}
+KNOWN_EXCHANGE_KEYWORDS = {
+    "binance": "BINANCE", "coinbase": "COINBASE", "kraken": "KRAKEN", "bybit": "BYBIT",
+    "okx": "OKX", "okex": "OKX", "bitfinex": "BITFINEX", "kucoin": "KUCOIN",
+    "htx": "HTX", "huobi": "HUOBI", "gate.io": "GATEIO", "gateio": "GATEIO",
+    "mexc": "MEXC", "crypto.com": "CRYPTOCOM", "cryptocom": "CRYPTOCOM",
 }
 
 QUOTE_TOKENS = {"WETH", "ETH", "USDT", "USDC", "DAI", "WBTC"}
@@ -98,6 +123,100 @@ class Transfer:
 
 def normalize(addr: str) -> str:
     return addr.strip().lower()
+
+
+def build_default_address_book() -> dict:
+    return {
+        "exchange_wallets": dict(sorted((normalize(k), v) for k, v in DEFAULT_EXCHANGE_WALLETS.items())),
+        "router_or_protocol_addresses": dict(sorted((normalize(k), v) for k, v in DEFAULT_ROUTER_OR_PROTOCOL_ADDRESSES.items())),
+        "ignore_addresses": sorted(normalize(x) for x in DEFAULT_IGNORE_ADDRESSES),
+    }
+
+
+def write_default_address_book(path: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(build_default_address_book(), f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def apply_address_book(payload: dict) -> None:
+    global EXCHANGE_WALLETS, ROUTER_OR_PROTOCOL_ADDRESSES, IGNORE_ADDRESSES
+
+    exchange_wallets = {
+        normalize(addr): str(label).strip()
+        for addr, label in dict(payload.get("exchange_wallets", {})).items()
+        if str(addr).strip() and str(label).strip()
+    }
+    router_addresses = {
+        normalize(addr): str(label).strip()
+        for addr, label in dict(payload.get("router_or_protocol_addresses", {})).items()
+        if str(addr).strip() and str(label).strip()
+    }
+    ignore_addresses = {
+        normalize(addr)
+        for addr in list(payload.get("ignore_addresses", []))
+        if str(addr).strip()
+    }
+
+    EXCHANGE_WALLETS = exchange_wallets
+    ROUTER_OR_PROTOCOL_ADDRESSES = router_addresses
+    IGNORE_ADDRESSES = ignore_addresses
+
+
+def persist_current_address_book(path: Optional[str] = None) -> None:
+    normalized_path = os.path.abspath(path or ADDRESS_BOOK_STATE.get("path") or ADDRESS_BOOK_PATH_DEFAULT)
+    payload = {
+        "exchange_wallets": dict(sorted(EXCHANGE_WALLETS.items())),
+        "router_or_protocol_addresses": dict(sorted(ROUTER_OR_PROTOCOL_ADDRESSES.items())),
+        "ignore_addresses": sorted(IGNORE_ADDRESSES),
+    }
+    with open(normalized_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+    ADDRESS_BOOK_STATE["path"] = normalized_path
+    ADDRESS_BOOK_STATE["last_mtime"] = os.path.getmtime(normalized_path) if os.path.exists(normalized_path) else None
+    ADDRESS_BOOK_STATE["last_loaded_at"] = time.time()
+
+
+def load_address_book(path: str, create_if_missing: bool = True) -> None:
+    normalized_path = os.path.abspath(path)
+    if create_if_missing and not os.path.exists(normalized_path):
+        write_default_address_book(normalized_path)
+
+    with open(normalized_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    apply_address_book(payload)
+    ADDRESS_BOOK_STATE["path"] = normalized_path
+    ADDRESS_BOOK_STATE["last_mtime"] = os.path.getmtime(normalized_path) if os.path.exists(normalized_path) else None
+    ADDRESS_BOOK_STATE["last_loaded_at"] = time.time()
+
+    print(
+        f"[ADDR] 로드 완료 | exchanges={len(EXCHANGE_WALLETS)} | "
+        f"routers={len(ROUTER_OR_PROTOCOL_ADDRESSES)} | ignore={len(IGNORE_ADDRESSES)} | "
+        f"path={normalized_path}",
+        flush=True,
+    )
+
+
+def maybe_reload_address_book(path: Optional[str] = None, min_interval_seconds: int = ADDRESS_BOOK_RELOAD_SECONDS_DEFAULT) -> bool:
+    book_path = os.path.abspath(path or ADDRESS_BOOK_STATE.get("path") or ADDRESS_BOOK_PATH_DEFAULT)
+    now = time.time()
+    last_loaded_at = float(ADDRESS_BOOK_STATE.get("last_loaded_at") or 0.0)
+
+    if min_interval_seconds > 0 and (now - last_loaded_at) < min_interval_seconds:
+        return False
+
+    if not os.path.exists(book_path):
+        print(f"[ADDR] 주소록 파일 없음, 기본값 재생성: {book_path}", flush=True)
+        write_default_address_book(book_path)
+
+    current_mtime = os.path.getmtime(book_path)
+    last_mtime = ADDRESS_BOOK_STATE.get("last_mtime")
+    if last_mtime is not None and current_mtime == last_mtime:
+        ADDRESS_BOOK_STATE["last_loaded_at"] = now
+        return False
+
+    load_address_book(book_path, create_if_missing=True)
+    return True
 
 
 def utc_now_ts() -> int:
@@ -178,6 +297,19 @@ def ensure_db(conn: sqlite3.Connection) -> None:
     )
     cur.execute(
         '''
+        CREATE TABLE IF NOT EXISTS address_metadata_cache (
+            address TEXT PRIMARY KEY,
+            chainid TEXT NOT NULL,
+            source TEXT NOT NULL,
+            nametag TEXT,
+            labels_json TEXT,
+            exchange_label TEXT,
+            fetched_at INTEGER NOT NULL
+        )
+        '''
+    )
+    cur.execute(
+        '''
         CREATE TABLE IF NOT EXISTS sent_alerts (
             alert_key TEXT PRIMARY KEY,
             alert_type TEXT NOT NULL,
@@ -212,7 +344,7 @@ def seed_exchange_labels(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     for address, label in EXCHANGE_WALLETS.items():
         cur.execute(
-            "INSERT OR IGNORE INTO exchange_labels (address, label) VALUES (?, ?)",
+            "INSERT OR REPLACE INTO exchange_labels (address, label) VALUES (?, ?)",
             (normalize(address), label),
         )
     conn.commit()
@@ -258,6 +390,171 @@ def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
         raise RuntimeError(f"Etherscan error: message={message} result={result}")
 
     return data
+
+
+def guess_exchange_label_from_metadata(nametag: str, labels: List[str]) -> str:
+    joined = " | ".join([nametag or ""] + list(labels or [])).lower()
+    if "exchange" not in joined and not any(k in joined for k in KNOWN_EXCHANGE_KEYWORDS):
+        return ""
+    for key, canon in KNOWN_EXCHANGE_KEYWORDS.items():
+        if key in joined:
+            return canon
+    return ""
+
+
+def get_cached_metadata(conn: sqlite3.Connection, address: str, chainid: str, cache_hours: int) -> Optional[dict]:
+    cur = conn.cursor()
+    row = cur.execute(
+        """
+        SELECT source, nametag, labels_json, exchange_label, fetched_at
+        FROM address_metadata_cache
+        WHERE address = ? AND chainid = ?
+        """,
+        (normalize(address), chainid),
+    ).fetchone()
+    if not row:
+        return None
+    fetched_at = int(row[4] or 0)
+    if cache_hours > 0 and fetched_at + cache_hours * 3600 < utc_now_ts():
+        return None
+    try:
+        labels = json.loads(row[2] or "[]")
+    except Exception:
+        labels = []
+    return {"source": row[0] or "cache", "nametag": row[1] or "", "labels": labels, "exchange_label": row[3] or "", "fetched_at": fetched_at}
+
+
+def cache_metadata_result(conn: sqlite3.Connection, address: str, chainid: str, source: str, nametag: str, labels: List[str], exchange_label: str) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO address_metadata_cache (address, chainid, source, nametag, labels_json, exchange_label, fetched_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(address) DO UPDATE SET
+            chainid=excluded.chainid, source=excluded.source, nametag=excluded.nametag,
+            labels_json=excluded.labels_json, exchange_label=excluded.exchange_label, fetched_at=excluded.fetched_at
+        """,
+        (normalize(address), chainid, source, nametag or "", json.dumps(labels or [], ensure_ascii=False), exchange_label or "", utc_now_ts()),
+    )
+    conn.commit()
+
+
+def add_exchange_address_to_books(conn: sqlite3.Connection, address: str, label: str, address_book_path: Optional[str] = None) -> bool:
+    address = normalize(address)
+    label = str(label or "").strip().upper()
+    if not address or not label:
+        return False
+    existing = EXCHANGE_WALLETS.get(address)
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO exchange_labels (address, label) VALUES (?, ?)", (address, label))
+    conn.commit()
+    if existing == label:
+        return False
+    EXCHANGE_WALLETS[address] = label
+    persist_current_address_book(address_book_path)
+    print(f"[ADDR][AUTO] 거래소 주소 추가: {address} -> {label}", flush=True)
+    return True
+
+
+def get_address_nametag_metadata(conn: sqlite3.Connection, address: str, chainid: str, cache_hours: int) -> Optional[dict]:
+    cached = get_cached_metadata(conn, address, chainid, cache_hours)
+    if cached is not None:
+        return cached
+    data = etherscan_get({"chainid": chainid, "module": "nametag", "action": "getaddresstag", "address": normalize(address)}, timeout=20)
+    items = data.get("result", []) or []
+    if not items:
+        cache_metadata_result(conn, address, chainid, "getaddresstag", "", [], "")
+        return None
+    item = items[0]
+    nametag = str(item.get("nametag") or "")
+    labels = [str(x).strip() for x in list(item.get("labels") or []) if str(x).strip()]
+    exchange_label = guess_exchange_label_from_metadata(nametag, labels)
+    cache_metadata_result(conn, address, chainid, "getaddresstag", nametag, labels, exchange_label)
+    return {"source": "getaddresstag", "nametag": nametag, "labels": labels, "exchange_label": exchange_label, "fetched_at": utc_now_ts()}
+
+
+def collect_unknown_addresses_for_enrichment(conn: sqlite3.Connection, chainid: str, days: int, limit: int) -> List[str]:
+    cutoff = utc_now_ts() - days * 86400
+    cur = conn.cursor()
+    rows = cur.execute(
+        """
+        WITH seen AS (
+            SELECT from_addr AS address, COUNT(*) AS cnt FROM transfers WHERE chainid = ? AND timestamp >= ? GROUP BY from_addr
+            UNION ALL
+            SELECT to_addr AS address, COUNT(*) AS cnt FROM transfers WHERE chainid = ? AND timestamp >= ? GROUP BY to_addr
+        )
+        SELECT address, SUM(cnt) AS total_cnt FROM seen GROUP BY address ORDER BY total_cnt DESC LIMIT ?
+        """,
+        (chainid, cutoff, chainid, cutoff, max(limit * 8, limit)),
+    ).fetchall()
+    out = []
+    for address, _ in rows:
+        address = normalize(address)
+        if not address or address in IGNORE_ADDRESSES or address in EXCHANGE_WALLETS or address in ROUTER_OR_PROTOCOL_ADDRESSES:
+            continue
+        out.append(address)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def auto_enrich_exchange_addresses(conn: sqlite3.Connection, chainid: str, days: int, address_book_path: str, max_addresses: int, cache_hours: int, sleep_sec: float) -> int:
+    if max_addresses <= 0:
+        return 0
+    candidates = collect_unknown_addresses_for_enrichment(conn, chainid, days, max_addresses)
+    if not candidates:
+        return 0
+    added = 0
+    for idx, address in enumerate(candidates, start=1):
+        try:
+            meta = get_address_nametag_metadata(conn, address, chainid, cache_hours=cache_hours)
+        except Exception as e:
+            print(f"[ADDR][AUTO] 메타데이터 조회 실패 {address}: {e}", flush=True)
+            if idx == 1:
+                print("[ADDR][AUTO] getaddresstag 사용 불가 시 Etherscan Pro Plus 이상 권한이 필요할 수 있습니다.", flush=True)
+            break
+        if not meta:
+            continue
+        exchange_label = meta.get("exchange_label") or ""
+        if exchange_label and add_exchange_address_to_books(conn, address, exchange_label, address_book_path=address_book_path):
+            added += 1
+        time.sleep(max(sleep_sec, 0.55))
+    return added
+
+
+def etherscan_metadata_v1_get(params: Dict[str, str], timeout: int = 30) -> str:
+    api_key = os.getenv("ETHERSCAN_API_KEY")
+    if not api_key:
+        raise RuntimeError("환경변수 ETHERSCAN_API_KEY가 없습니다.")
+    full_params = dict(params)
+    full_params["apikey"] = api_key
+    resp = requests.get(METADATA_API_V1_URL, params=full_params, timeout=timeout)
+    resp.raise_for_status()
+    return resp.text
+
+
+def bootstrap_exchange_addresses_from_etherscan(conn: sqlite3.Connection, chainid: str, label_slugs: List[str], address_book_path: str) -> int:
+    added = 0
+    for slug in label_slugs:
+        slug = str(slug or "").strip().lower()
+        if not slug:
+            continue
+        try:
+            csv_text = etherscan_metadata_v1_get({"module": "nametag", "action": "exportaddresstags", "label": slug, "format": "csv"}, timeout=60)
+        except Exception as e:
+            print(f"[ADDR][BOOTSTRAP] label={slug} export 실패: {e}", flush=True)
+            continue
+        reader = csv.DictReader(io.StringIO(csv_text), delimiter=';')
+        for row in reader:
+            address = normalize(row.get("address", ""))
+            nametag = str(row.get("nametag") or "")
+            labels_slug = str(row.get("labels_slug") or "")
+            exchange_label = guess_exchange_label_from_metadata(nametag, [labels_slug, slug, row.get("labels") or ""]) or KNOWN_EXCHANGE_KEYWORDS.get(slug, slug.upper())
+            if address:
+                if add_exchange_address_to_books(conn, address, exchange_label, address_book_path=address_book_path):
+                    added += 1
+                cache_metadata_result(conn, address, chainid, f"exportaddresstags:{slug}", nametag, [row.get("labels") or "", labels_slug], exchange_label)
+    return added
 
 
 def fetch_erc20_transfers(
@@ -1487,6 +1784,8 @@ def run_active_hub_fast_scan_loop(
     conn: sqlite3.Connection,
     chainid: str,
     days: int,
+    address_book_path: str,
+    address_book_reload_seconds: int,
     active_hub_max_track: int,
     active_hub_scan_max_pages: int,
     active_hub_burst_window_hours: int,
@@ -1497,6 +1796,9 @@ def run_active_hub_fast_scan_loop(
     iterations: int,
     active_hub_csv: str,
     active_hub_scan_csv: str,
+    auto_exchange_enrich: bool,
+    auto_exchange_enrich_limit: int,
+    auto_exchange_cache_hours: int,
 ) -> None:
     if interval_minutes <= 0 or iterations <= 0:
         return
@@ -1504,6 +1806,9 @@ def run_active_hub_fast_scan_loop(
     print(f"\n[FAST] 활성 허브 빠른 감시 시작: interval={interval_minutes}분, iterations={iterations}")
     for idx in range(1, iterations + 1):
         print(f"\n[FAST] ({idx}/{iterations}) 활성 허브 빠른 감시")
+        if maybe_reload_address_book(address_book_path, address_book_reload_seconds):
+            seed_exchange_labels(conn)
+
         expired = expire_old_active_hubs(conn, chainid)
         if expired:
             print(f"[FAST] 만료 처리 수: {expired}")
@@ -1524,6 +1829,13 @@ def run_active_hub_fast_scan_loop(
                 sleep_sec=sleep_sec,
             )
             print(f"[FAST] 활성 허브 수집 신규 저장 전송 수: {expanded_saved}")
+
+            if auto_exchange_enrich:
+                added = auto_enrich_exchange_addresses(conn=conn, chainid=chainid, days=days, address_book_path=address_book_path, max_addresses=auto_exchange_enrich_limit, cache_hours=auto_exchange_cache_hours, sleep_sec=sleep_sec)
+                if added:
+                    print(f"[ADDR][AUTO][FAST] 추가된 거래소 주소 수: {added}", flush=True)
+            if maybe_reload_address_book(address_book_path, address_book_reload_seconds):
+                seed_exchange_labels(conn)
 
             active_hub_scan_rows = scan_active_hub_outflows(
                 conn=conn,
@@ -1552,6 +1864,13 @@ def main() -> int:
     parser.add_argument("--sleep-sec", type=float, default=0.4, help="API 호출 간 대기")
     parser.add_argument("--top", type=int, default=20, help="상위 몇 개 허브 후보/상세 출력할지")
     parser.add_argument("--csv", default="hub_candidates.csv", help="결과 CSV 파일명")
+    parser.add_argument("--address-book", default=ADDRESS_BOOK_PATH_DEFAULT, help="거래소/라우터/ignore 주소록 JSON 파일 경로")
+    parser.add_argument("--address-book-reload-seconds", type=int, default=ADDRESS_BOOK_RELOAD_SECONDS_DEFAULT, help="주소록 파일 변경 재로딩 최소 간격(초)")
+    parser.add_argument("--auto-exchange-enrich", action="store_true", help="알 수 없는 주소를 Etherscan 라벨로 조회해 거래소 주소를 자동 축적")
+    parser.add_argument("--auto-exchange-enrich-limit", type=int, default=AUTO_EXCHANGE_ENRICH_LIMIT_DEFAULT, help="1회 분석당 자동 축적할 미확인 주소 최대 개수")
+    parser.add_argument("--auto-exchange-cache-hours", type=int, default=AUTO_EXCHANGE_ENRICH_CACHE_HOURS_DEFAULT, help="주소 메타데이터 캐시 유지 시간")
+    parser.add_argument("--bootstrap-exchange-labels", default=",".join(BOOTSTRAP_EXCHANGE_LABEL_SLUGS_DEFAULT), help="시작 시 exportaddresstags로 대량 반영할 라벨 slug 목록(콤마 구분)")
+    parser.add_argument("--bootstrap-exchange-on-start", action="store_true", help="시작 시 Etherscan 라벨 export로 거래소 주소를 대량 반영")
 
     parser.add_argument("--enable-flow", action="store_true", help="seed -> hub -> ... -> exchange 흐름 추적 사용")
     parser.add_argument("--flow-max-hops", type=int, default=3, help="최대 hop 수. 기본 3")
@@ -1574,12 +1893,21 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    load_address_book(args.address_book, create_if_missing=True)
+
     seeds = read_seed_addresses(args.seeds)
 
     conn = sqlite3.connect(DB_PATH)
     ensure_db(conn)
     seed_exchange_labels(conn)
 
+    bootstrap_label_slugs = [x.strip().lower() for x in str(args.bootstrap_exchange_labels or "").split(",") if x.strip()]
+    if args.bootstrap_exchange_on_start and bootstrap_label_slugs:
+        added = bootstrap_exchange_addresses_from_etherscan(conn=conn, chainid=args.chainid, label_slugs=bootstrap_label_slugs, address_book_path=args.address_book)
+        if added:
+            print(f"[ADDR][BOOTSTRAP] 추가된 거래소 주소 수: {added}", flush=True)
+
+    print(f"[INFO] address_book={os.path.abspath(args.address_book)}")
     print(f"[INFO] seed 수: {len(seeds)}")
     print(f"[INFO] chainid={args.chainid}, days={args.days}, offset={args.offset}, max_pages={args.max_pages}")
 
@@ -1599,6 +1927,14 @@ def main() -> int:
         print(f"       저장된 신규 전송: {saved}")
 
     print(f"[INFO] 총 신규 저장 전송 수: {total_saved}")
+
+    if args.auto_exchange_enrich:
+        added = auto_enrich_exchange_addresses(conn=conn, chainid=args.chainid, days=args.days, address_book_path=args.address_book, max_addresses=args.auto_exchange_enrich_limit, cache_hours=args.auto_exchange_cache_hours, sleep_sec=args.sleep_sec)
+        if added:
+            print(f"[ADDR][AUTO] 이번 분석에서 자동 추가된 거래소 주소 수: {added}", flush=True)
+
+    if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
+        seed_exchange_labels(conn)
 
     rows = build_hub_scores(
         conn=conn,
@@ -1642,6 +1978,8 @@ def main() -> int:
     flow_rows: List[dict] = []
     flow_csv = f"flow_exchange_{args.csv}"
     if args.enable_flow:
+        if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
+            seed_exchange_labels(conn)
         flow_track_addresses = select_flow_expansion_addresses(
             seeds=seeds,
             hub_rows=rows,
@@ -1660,6 +1998,13 @@ def main() -> int:
                 sleep_sec=args.sleep_sec,
             )
             print(f"[FLOW] 확장 수집 신규 저장 전송 수: {expanded_saved}")
+
+            if args.auto_exchange_enrich:
+                added = auto_enrich_exchange_addresses(conn=conn, chainid=args.chainid, days=args.days, address_book_path=args.address_book, max_addresses=args.auto_exchange_enrich_limit, cache_hours=args.auto_exchange_cache_hours, sleep_sec=args.sleep_sec)
+                if added:
+                    print(f"[ADDR][AUTO][FLOW] 추가된 거래소 주소 수: {added}", flush=True)
+            if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
+                seed_exchange_labels(conn)
 
             flow_rows = build_flow_paths(
                 conn=conn,
@@ -1684,6 +2029,8 @@ def main() -> int:
     active_hub_csv = f"active_hubs_{args.csv}"
     active_hub_scan_csv = f"active_hub_events_{args.csv}"
     if args.enable_active_hubs:
+        if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
+            seed_exchange_labels(conn)
         expired = expire_old_active_hubs(conn, args.chainid)
         if expired:
             print(f"[HUB] 만료 처리 수: {expired}")
@@ -1718,6 +2065,13 @@ def main() -> int:
             )
             print(f"[HUB] 활성 허브 수집 신규 저장 전송 수: {expanded_saved}")
 
+            if args.auto_exchange_enrich:
+                added = auto_enrich_exchange_addresses(conn=conn, chainid=args.chainid, days=args.days, address_book_path=args.address_book, max_addresses=args.auto_exchange_enrich_limit, cache_hours=args.auto_exchange_cache_hours, sleep_sec=args.sleep_sec)
+                if added:
+                    print(f"[ADDR][AUTO][HUB] 추가된 거래소 주소 수: {added}", flush=True)
+            if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
+                seed_exchange_labels(conn)
+
             active_hub_scan_rows = scan_active_hub_outflows(
                 conn=conn,
                 active_hubs=active_hub_rows,
@@ -1740,6 +2094,8 @@ def main() -> int:
             conn=conn,
             chainid=args.chainid,
             days=args.days,
+            address_book_path=args.address_book,
+            address_book_reload_seconds=args.address_book_reload_seconds,
             active_hub_max_track=args.active_hub_max_track,
             active_hub_scan_max_pages=args.active_hub_scan_max_pages,
             active_hub_burst_window_hours=args.active_hub_burst_window_hours,
@@ -1750,6 +2106,9 @@ def main() -> int:
             iterations=args.active_hub_fast_iterations,
             active_hub_csv=active_hub_csv,
             active_hub_scan_csv=active_hub_scan_csv,
+            auto_exchange_enrich=args.auto_exchange_enrich,
+            auto_exchange_enrich_limit=args.auto_exchange_enrich_limit,
+            auto_exchange_cache_hours=args.auto_exchange_cache_hours,
         )
 
     print(f"\n[INFO] 결과 CSV 저장: {args.csv}")
@@ -1759,6 +2118,7 @@ def main() -> int:
     if args.enable_active_hubs:
         print(f"[INFO] active hub 목록 CSV 저장: {active_hub_csv}")
         print(f"[INFO] active hub 이벤트 CSV 저장: {active_hub_scan_csv}")
+    print(f"[INFO] address book JSON: {os.path.abspath(args.address_book)}")
     print(f"[INFO] SQLite DB 저장: {DB_PATH}")
 
     conn.close()
