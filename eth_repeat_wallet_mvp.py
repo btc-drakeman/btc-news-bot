@@ -94,6 +94,8 @@ FLOW_MIN_AMOUNT_RATIO = 0.60
 FLOW_MAX_NEXT_EDGES = 12
 FLOW_MAX_TRACK_ADDRS = 30
 FLOW_ALERT_EXCHANGE_ONLY_DEFAULT = True
+FLOW_ALERT_MAX_AGE_HOURS_DEFAULT = 12
+FLOW_MAX_ALERTS_PER_RUN_DEFAULT = 5
 
 # active hub watcher 기본값
 ACTIVE_HUB_MIN_SHARED = 2
@@ -1391,17 +1393,61 @@ def print_flow_paths(rows: List[dict], top: int = 20) -> None:
         )
 
 
-def send_flow_alerts(conn: sqlite3.Connection, flow_rows: List[dict]) -> None:
+def send_flow_alerts(
+    conn: sqlite3.Connection,
+    flow_rows: List[dict],
+    max_age_hours: int = FLOW_ALERT_MAX_AGE_HOURS_DEFAULT,
+    max_alerts_per_run: int = FLOW_MAX_ALERTS_PER_RUN_DEFAULT,
+) -> None:
     print("\n=== 온체인 텔레그램 알림: flow exchange only ===")
     sent_count = 0
+
+    cutoff_ts = utc_now_ts() - max(0, int(max_age_hours)) * 3600 if max_age_hours > 0 else 0
+
+    filtered_rows: List[dict] = []
     for row in flow_rows:
+        end_time_utc = row.get("end_time_utc") or row.get("start_time_utc") or ""
+        try:
+            end_ts = int(datetime.strptime(end_time_utc, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+        except Exception:
+            end_ts = 0
+        row["_end_ts"] = end_ts
+        if cutoff_ts and end_ts and end_ts < cutoff_ts:
+            continue
+        filtered_rows.append(row)
+
+    dedup_map: Dict[Tuple[str, str, str, str], dict] = {}
+    for row in filtered_rows:
+        dedup_key = (
+            normalize(row.get("seed") or ""),
+            normalize(row.get("token_symbol") or ""),
+            normalize(row.get("exchange") or ""),
+            normalize(row.get("path_addresses") or row.get("path") or ""),
+        )
+        prev = dedup_map.get(dedup_key)
+        if prev is None or int(row.get("_end_ts") or 0) > int(prev.get("_end_ts") or 0):
+            dedup_map[dedup_key] = row
+
+    dedup_rows = sorted(
+        dedup_map.values(),
+        key=lambda x: (int(x.get("_end_ts") or 0), int(x.get("hop_count") or 0)),
+        reverse=True,
+    )
+
+    final_rows = dedup_rows[:max(1, int(max_alerts_per_run))] if max_alerts_per_run > 0 else dedup_rows
+
+    print(
+        f"[FLOW] 알림 필터링 결과: raw={len(flow_rows)} -> recent={len(filtered_rows)} -> dedup={len(dedup_rows)} -> final={len(final_rows)}",
+        flush=True,
+    )
+
+    for row in final_rows:
         alert_key = make_alert_key(
             "flow_exchange",
-            row["seed"],
-            row["first_tx_hash"],
-            row["last_tx_hash"],
-            row["contract_address"],
-            row["exchange"],
+            normalize(row.get("seed") or ""),
+            normalize(row.get("token_symbol") or ""),
+            normalize(row.get("exchange") or ""),
+            normalize(row.get("path_addresses") or row.get("path") or ""),
         )
         if has_sent_alert(conn, alert_key):
             continue
@@ -1879,6 +1925,8 @@ def main() -> int:
     parser.add_argument("--flow-max-track-addrs", type=int, default=FLOW_MAX_TRACK_ADDRS, help="확장 추적할 주소 최대 개수")
     parser.add_argument("--flow-min-amount-ratio", type=float, default=FLOW_MIN_AMOUNT_RATIO, help="이전 hop 대비 최소 금액 비율")
     parser.add_argument("--alerts-exchange-only", action="store_true", help="텔레그램은 거래소 도착 flow만 전송")
+    parser.add_argument("--flow-alert-max-age-hours", type=int, default=FLOW_ALERT_MAX_AGE_HOURS_DEFAULT, help="flow 텔레그램 알림 최대 허용 신선도(시간). 0이면 전체 허용")
+    parser.add_argument("--flow-max-alerts-per-run", type=int, default=FLOW_MAX_ALERTS_PER_RUN_DEFAULT, help="1회 실행당 flow 텔레그램 최대 전송 개수. 0 이하이면 전체 전송")
 
     parser.add_argument("--enable-active-hubs", action="store_true", help="활성 허브 감시 사용")
     parser.add_argument("--active-hub-ttl-hours", type=int, default=ACTIVE_HUB_TTL_HOURS, help="활성 허브 감시 유지 시간")
@@ -2017,7 +2065,7 @@ def main() -> int:
             )
             print_flow_paths(flow_rows, top=args.top)
             export_csv(flow_csv, flow_rows)
-            send_flow_alerts(conn, flow_rows)
+            send_flow_alerts(conn, flow_rows, max_age_hours=args.flow_alert_max_age_hours, max_alerts_per_run=args.flow_max_alerts_per_run)
         else:
             export_csv(flow_csv, flow_rows)
             print("[FLOW] 확장할 주소가 없습니다.")
