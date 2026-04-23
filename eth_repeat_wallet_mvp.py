@@ -1709,30 +1709,7 @@ def scan_active_hub_outflows(
                     }
                 )
 
-        elif len(unique_targets) >= min_outgoing_count_for_b and len(recent_burst_rows) >= min_outgoing_count_for_b:
-            results.append(
-                {
-                    "level": "B",
-                    "hub": address,
-                    "shared_seed_count": hub["shared_seed_count"],
-                    "score": hub["score"],
-                    "source_seeds": hub["source_seeds"],
-                    "time_utc": datetime.fromtimestamp(newest_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "timestamp": newest_ts,
-                    "token_symbol": top_token,
-                    "amount": format_token_amount(str(int(total_amount * 10000)), 4) if total_amount > 0 else "0",
-                    "amount_float": total_amount,
-                    "to_addr": ",".join(shorten(a) for a in unique_targets[:5]),
-                    "to_label": "-",
-                    "target_kind": "unknown",
-                    "tx_hash": recent_burst_rows[0]["tx_hash"],
-                    "recent_outgoing_count": len(recent_burst_rows),
-                    "unique_target_count": len(unique_targets),
-                    "top_token": top_token,
-                    "burst_total_amount": total_amount,
-                    "note": "active hub burst outflows",
-                }
-            )
+        # 거래소 유입만 핵심으로 보기 위해 B급(연쇄 출금 시작) 이벤트는 생성하지 않는다.
 
     results.sort(key=lambda x: (x["timestamp"], x["level"], x["score"]), reverse=True)
     return results
@@ -1782,32 +1759,7 @@ def send_active_hub_alerts(conn: sqlite3.Connection, rows: List[dict]) -> None:
             if send_telegram_message(msg):
                 mark_alert_sent(conn, alert_key, "active_hub_A")
                 sent_count += 1
-        elif level == "B":
-            alert_key = make_alert_key(
-                "active_hub_B",
-                row["hub"],
-                row["time_utc"],
-                row["unique_target_count"],
-                row["recent_outgoing_count"],
-                row["top_token"],
-            )
-            if has_sent_alert(conn, alert_key):
-                continue
-            msg = (
-                "[ONCHAIN][B] 활성 허브 연쇄 출금 시작\n"
-                f"hub: {shorten(row['hub'])}\n"
-                f"top_token: {row['top_token']}\n"
-                f"recent_outflows: {row['recent_outgoing_count']}\n"
-                f"unique_targets: {row['unique_target_count']}\n"
-                f"score: {row['score']}\n"
-                f"shared: {row['shared_seed_count']}\n"
-                f"source_seeds: {row['source_seeds']}\n"
-                f"targets: {row['to_addr']}\n"
-                f"time: {row['time_utc']}"
-            )
-            if send_telegram_message(msg):
-                mark_alert_sent(conn, alert_key, "active_hub_B")
-                sent_count += 1
+        # B급(연쇄 출금 시작) 알림은 비활성화: 거래소 도착 A급만 전송
 
     print(f"[TG] active hub 알림 전송 수: {sent_count}", flush=True)
 

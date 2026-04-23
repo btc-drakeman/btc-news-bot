@@ -696,9 +696,9 @@ def run_onchain() -> None:
         print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
 
         if eth.returncode == 0:
-            print("[ONCHAIN-CHART] 온체인 토큰 후보 확인 시작", flush=True)
-            analyze_onchain_chart_candidates()
-            print("[ONCHAIN-CHART] 온체인 토큰 후보 확인 종료", flush=True)
+            # 차트 후보 알림([TOP50 매집 후보])은 signal_loop에서 독립적으로 전송한다.
+            # 온체인 결합 후보([ONCHAIN+TOP50 후보])는 중복 방지를 위해 비활성화한다.
+            print("[ONCHAIN-CHART] 비활성화: 차트 후보 알림은 signal_loop에서만 전송", flush=True)
 
         print("[ONCHAIN] 종료", flush=True)
     except Exception as e:
