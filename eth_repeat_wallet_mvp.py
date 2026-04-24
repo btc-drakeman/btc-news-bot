@@ -81,6 +81,20 @@ QUOTE_TOKENS = {"WETH", "ETH", "USDT", "USDC", "DAI", "WBTC"}
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+DEBUG_ONCHAIN = os.getenv("ONCHAIN_DEBUG", "1") != "0"
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("ONCHAIN_REQUEST_TIMEOUT", "15"))
+
+def dbg(msg: str) -> None:
+    if DEBUG_ONCHAIN:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[DBG {now}] {msg}", flush=True)
+
+def safe_len(obj) -> int:
+    try:
+        return len(obj)
+    except Exception:
+        return -1
+
 # 알림 완화용 임계값
 HUB_MIN_SHARED_FOR_ALERT = 3
 HUB_MIN_SCORE_FOR_ALERT = 18
@@ -377,13 +391,33 @@ def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
     full_params = dict(params)
     full_params["apikey"] = api_key
 
-    resp = requests.get(API_URL, params=full_params, timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json()
+    action = full_params.get("action", "-")
+    module = full_params.get("module", "-")
+    address = full_params.get("address", "-")
+    page = full_params.get("page", "-")
+    effective_timeout = min(int(timeout or REQUEST_TIMEOUT_SECONDS), REQUEST_TIMEOUT_SECONDS)
+
+    dbg(f"ETHERSCAN 요청 시작 module={module} action={action} address={address} page={page} timeout={effective_timeout}s")
+    t0 = time.time()
+    try:
+        resp = requests.get(API_URL, params=full_params, timeout=effective_timeout)
+        elapsed = time.time() - t0
+        dbg(f"ETHERSCAN 응답 도착 status_code={resp.status_code} elapsed={elapsed:.1f}s module={module} action={action} address={address} page={page}")
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.exceptions.Timeout as e:
+        elapsed = time.time() - t0
+        dbg(f"ETHERSCAN TIMEOUT elapsed={elapsed:.1f}s module={module} action={action} address={address} page={page}")
+        raise RuntimeError(f"Etherscan timeout after {effective_timeout}s: module={module} action={action} address={address} page={page}") from e
+    except Exception as e:
+        elapsed = time.time() - t0
+        dbg(f"ETHERSCAN 요청 실패 elapsed={elapsed:.1f}s module={module} action={action} address={address} page={page} error={e}")
+        raise
 
     status = str(data.get("status", ""))
     message = str(data.get("message", ""))
     result = data.get("result")
+    dbg(f"ETHERSCAN 데이터 파싱 status={status} message={message} result_len={safe_len(result)} action={action} address={address} page={page}")
 
     if status == "0":
         text = str(result)
@@ -392,7 +426,6 @@ def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
         raise RuntimeError(f"Etherscan error: message={message} result={result}")
 
     return data
-
 
 def guess_exchange_label_from_metadata(nametag: str, labels: List[str]) -> str:
     joined = " | ".join([nametag or ""] + list(labels or [])).lower()
@@ -530,10 +563,21 @@ def etherscan_metadata_v1_get(params: Dict[str, str], timeout: int = 30) -> str:
         raise RuntimeError("환경변수 ETHERSCAN_API_KEY가 없습니다.")
     full_params = dict(params)
     full_params["apikey"] = api_key
-    resp = requests.get(METADATA_API_V1_URL, params=full_params, timeout=timeout)
-    resp.raise_for_status()
-    return resp.text
-
+    effective_timeout = min(int(timeout or REQUEST_TIMEOUT_SECONDS), REQUEST_TIMEOUT_SECONDS)
+    safe_params = {k: v for k, v in full_params.items() if k != "apikey"}
+    dbg(f"METADATA_V1 요청 시작 params={safe_params} timeout={effective_timeout}s")
+    t0 = time.time()
+    try:
+        resp = requests.get(METADATA_API_V1_URL, params=full_params, timeout=effective_timeout)
+        dbg(f"METADATA_V1 응답 도착 status_code={resp.status_code} elapsed={time.time()-t0:.1f}s")
+        resp.raise_for_status()
+        return resp.text
+    except requests.exceptions.Timeout as e:
+        dbg(f"METADATA_V1 TIMEOUT elapsed={time.time()-t0:.1f}s")
+        raise RuntimeError(f"Etherscan metadata timeout after {effective_timeout}s") from e
+    except Exception as e:
+        dbg(f"METADATA_V1 요청 실패 elapsed={time.time()-t0:.1f}s error={e}")
+        raise
 
 def bootstrap_exchange_addresses_from_etherscan(conn: sqlite3.Connection, chainid: str, label_slugs: List[str], address_book_path: str) -> int:
     added = 0
@@ -647,8 +691,10 @@ def collect_for_address(
 ) -> int:
     cutoff = utc_now_ts() - days * 86400
     total_saved = 0
+    dbg(f"collect_for_address 시작 address={address} max_pages={max_pages} offset={offset}")
 
     for page in range(1, max_pages + 1):
+        dbg(f"주소 수집 page 시작 address={address} page={page}/{max_pages}")
         try:
             transfers = fetch_erc20_transfers(
                 address=address,
@@ -657,26 +703,31 @@ def collect_for_address(
                 offset=offset,
                 sort="desc",
             )
+            dbg(f"주소 수집 page 완료 address={address} page={page} transfers={len(transfers)}")
         except Exception as e:
-            print(f"[WARN] fetch 실패 address={address} page={page}: {e}")
+            print(f"[WARN] fetch 실패 address={address} page={page}: {e}", flush=True)
             break
 
         if not transfers:
+            dbg(f"주소 수집 종료: 전송 없음 address={address} page={page}")
             break
 
         recent = [t for t in transfers if t.timestamp >= cutoff]
+        dbg(f"최근 전송 필터 address={address} page={page} recent={len(recent)}/{len(transfers)}")
         if recent:
             saved = save_transfers(conn, recent)
             total_saved += saved
+            dbg(f"DB 저장 완료 address={address} page={page} saved={saved} total_saved={total_saved}")
 
         oldest_ts = min(t.timestamp for t in transfers)
         if oldest_ts < cutoff:
+            dbg(f"주소 수집 종료: cutoff 도달 address={address} page={page}")
             break
 
         time.sleep(sleep_sec)
 
+    dbg(f"collect_for_address 완료 address={address} total_saved={total_saved}")
     return total_saved
-
 
 def collect_for_seed(
     conn: sqlite3.Connection,
@@ -1933,13 +1984,22 @@ def main() -> int:
     parser.add_argument("--active-hub-fast-iterations", type=int, default=0, help="메인 분석 후 활성 허브 빠른 감시 반복 횟수. 0이면 비활성화")
 
     args = parser.parse_args()
+    dbg("MAIN 시작: argparse 완료")
+    dbg(f"ARGS seeds={args.seeds} chainid={args.chainid} days={args.days} max_pages={args.max_pages} enable_flow={args.enable_flow} enable_active_hubs={args.enable_active_hubs}")
 
+    dbg("주소록 로드 시작")
     load_address_book(args.address_book, create_if_missing=True)
+    dbg("주소록 로드 완료")
 
+    dbg("seed 파일 읽기 시작")
     seeds = read_seed_addresses(args.seeds)
+    dbg(f"seed 파일 읽기 완료 count={len(seeds)}")
 
+    dbg(f"SQLite 연결 시작 path={DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
+    dbg("DB 테이블 확인 시작")
     ensure_db(conn)
+    dbg("DB 테이블 확인 완료")
     seed_exchange_labels(conn)
     initial_bootstrap_mode = is_initial_onchain_bootstrap(conn)
     if initial_bootstrap_mode:
@@ -1957,7 +2017,8 @@ def main() -> int:
 
     total_saved = 0
     for idx, seed in enumerate(seeds, start=1):
-        print(f"[INFO] ({idx}/{len(seeds)}) 수집 중: {seed}")
+        print(f"[INFO] ({idx}/{len(seeds)}) 수집 중: {seed}", flush=True)
+        dbg(f"SEED 수집 시작 idx={idx}/{len(seeds)} seed={seed}")
         saved = collect_for_seed(
             conn=conn,
             seed=seed,
@@ -1968,9 +2029,11 @@ def main() -> int:
             sleep_sec=args.sleep_sec,
         )
         total_saved += saved
-        print(f"       저장된 신규 전송: {saved}")
+        print(f"       저장된 신규 전송: {saved}", flush=True)
+        dbg(f"SEED 수집 완료 idx={idx}/{len(seeds)} seed={seed} saved={saved}")
 
-    print(f"[INFO] 총 신규 저장 전송 수: {total_saved}")
+    print(f"[INFO] 총 신규 저장 전송 수: {total_saved}", flush=True)
+    dbg("전체 seed 수집 루프 완료")
 
     if args.auto_exchange_enrich:
         added = auto_enrich_exchange_addresses(conn=conn, chainid=args.chainid, days=args.days, address_book_path=args.address_book, max_addresses=args.auto_exchange_enrich_limit, cache_hours=args.auto_exchange_cache_hours, sleep_sec=args.sleep_sec)
@@ -1980,6 +2043,7 @@ def main() -> int:
     if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
         seed_exchange_labels(conn)
 
+    dbg("허브 점수 계산 시작")
     rows = build_hub_scores(
         conn=conn,
         chainid=args.chainid,
@@ -1987,9 +2051,12 @@ def main() -> int:
         min_shared_seed_count=2,
     )
 
+    dbg(f"허브 점수 계산 완료 rows={len(rows)}")
+    dbg(f"허브 CSV 저장 시작 path={args.csv}")
     export_csv(args.csv, rows)
+    dbg("허브 CSV 저장 완료")
 
-    print("\n=== 상위 허브 후보 ===")
+    print("\n=== 상위 허브 후보 ===", flush=True)
     for row in rows[: args.top]:
         print(
             f"score={row['score']:>2} | shared={row['shared_seed_count']} | "
@@ -2000,6 +2067,7 @@ def main() -> int:
             f"{row['address']}"
         )
 
+    dbg("시드 출금 상세 계산 시작")
     outflow_rows = get_seed_outflow_details(
         conn=conn,
         seeds=seeds,
@@ -2007,10 +2075,13 @@ def main() -> int:
         days=args.days,
         candidate_rows=rows,
     )
+    dbg(f"시드 출금 상세 계산 완료 rows={len(outflow_rows)}")
     print_seed_outflow_details(outflow_rows, top=args.top)
 
     detail_csv = f"seed_outflows_{args.csv}"
+    dbg(f"시드 출금 CSV 저장 시작 path={detail_csv}")
     export_csv(detail_csv, outflow_rows)
+    dbg("시드 출금 CSV 저장 완료")
 
     alerts_exchange_only = args.alerts_exchange_only or FLOW_ALERT_EXCHANGE_ONLY_DEFAULT
     if not alerts_exchange_only:
@@ -2021,6 +2092,7 @@ def main() -> int:
 
     flow_rows: List[dict] = []
     flow_csv = f"flow_exchange_{args.csv}"
+    dbg(f"FLOW 분기 진입 여부 enable_flow={args.enable_flow}")
     if args.enable_flow:
         if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
             seed_exchange_labels(conn)
@@ -2072,6 +2144,7 @@ def main() -> int:
     active_hub_scan_rows: List[dict] = []
     active_hub_csv = f"active_hubs_{args.csv}"
     active_hub_scan_csv = f"active_hub_events_{args.csv}"
+    dbg(f"ACTIVE_HUB 분기 진입 여부 enable_active_hubs={args.enable_active_hubs}")
     if args.enable_active_hubs:
         if maybe_reload_address_book(args.address_book, args.address_book_reload_seconds):
             seed_exchange_labels(conn)
@@ -2169,7 +2242,9 @@ def main() -> int:
         mark_initial_onchain_bootstrap_done(conn)
         print("[BOOTSTRAP] 기준 저장 완료: 다음 실행부터 새 거래소 유입만 알림 전송", flush=True)
 
+    dbg("SQLite 연결 종료 시작")
     conn.close()
+    dbg("MAIN 정상 종료")
     return 0
 
 
