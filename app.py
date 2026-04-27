@@ -23,16 +23,6 @@ STABLE_EXCLUDED = {"USDC", "EUR", "FDUSD", "USDT", "TUSD", "USDE", "DAI", "PYUSD
 last_alert_time: Dict[str, float] = {}
 spot_loop_started = False
 onchain_loop_started = False
-watchdog_loop_started = False
-
-# 온체인 루프 안정화용 상태값
-onchain_thread: Optional[threading.Thread] = None
-onchain_running = False
-LAST_ONCHAIN_LOOP_START = 0.0
-LAST_ONCHAIN_LOOP_END = 0.0
-ONCHAIN_WATCHDOG_INTERVAL = 120
-ONCHAIN_STALE_SECONDS = 30 * 60
-ONCHAIN_LOCK = threading.Lock()
 
 CURRENT_SYMBOLS: List[str] = []
 LAST_SYMBOL_UPDATE_TIME = 0.0
@@ -57,20 +47,20 @@ SIGNAL_INTERVAL_5M = "5m"
 TREND_INTERVAL_15M = "15m"
 ENV_INTERVAL_1H = "1h"
 
-CANDIDATE_MIN_SCORE = 5
+CANDIDATE_MIN_SCORE = 6
 CANDIDATE_MAX_PER_ALERT = 5
-MAX_RECENT_6C_SURGE = 6.5
-MAX_LAST2_MOVE = 1.8
+MAX_RECENT_6C_SURGE = 4.5
+MAX_LAST2_MOVE = 1.2
 MAX_BASIS_ABS = 0.35
-MIN_SUPPORT_TOUCHES = 3
+MIN_SUPPORT_TOUCHES = 4
 SUPPORT_BAND_PCT = 1.2
-COMPRESSION_RATIO_MAX = 1.05
-VOLUME_ALIVE_MIN = 0.55
-VOLUME_ALIVE_MAX = 2.50
+COMPRESSION_RATIO_MAX = 0.85
+VOLUME_ALIVE_MIN = 0.75
+VOLUME_ALIVE_MAX = 1.80
 WICK_TEST_MIN_RATIO = 0.45
 WICK_TEST_MAX_BODY = 0.45
 MAX_SINGLE_CANDLE_RANGE = 3.2
-RANGE_12C_MAX = 4.2
+RANGE_12C_MAX = 3.0
 RANGE_12C_BEST = 2.0
 MIN_RANGE_12C = 0.20
 MAX_RECENT12_TREND_ABS = 3.5
@@ -523,12 +513,12 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
     max_surge = 8.0 if relaxed else MAX_RECENT_6C_SURGE
     max_last2 = 2.4 if relaxed else MAX_LAST2_MOVE
     max_single = 5.5 if relaxed else MAX_SINGLE_CANDLE_RANGE
-    min_support = 1 if relaxed else MIN_SUPPORT_TOUCHES
+    min_support = 2 if relaxed else MIN_SUPPORT_TOUCHES
     vol_min = 0.45 if relaxed else VOLUME_ALIVE_MIN
     vol_max = 3.20 if relaxed else VOLUME_ALIVE_MAX
     max_basis = 0.80 if relaxed else MAX_BASIS_ABS
     max_above_support = 5.0 if relaxed else 2.8
-    min_score = 3 if relaxed else CANDIDATE_MIN_SCORE
+    min_score = 4 if relaxed else CANDIDATE_MIN_SCORE
 
     if recent12_range < min_range:
         return None
@@ -675,10 +665,24 @@ def update_onchain_focus_from_flow_csv(path: str = ONCHAIN_FLOW_CSV) -> None:
 
 
 def get_scan_symbols_with_focus(symbols: List[str]) -> List[str]:
+    """
+    일반 Top 감시 종목 + 온체인 거래소 유입 감지 종목을 합친다.
+    ONCHAIN_FOCUS_SYMBOLS에 있는 코인은 Top 거래량 리스트에 없어도 무조건 분석 대상에 포함한다.
+    """
     cleanup_onchain_focus_symbols()
-    merged = list(dict.fromkeys(list(symbols) + list(ONCHAIN_FOCUS_SYMBOLS.keys())))
-    if ONCHAIN_FOCUS_SYMBOLS:
-        print(f"[ONCHAIN-FOCUS] 집중 감시 종목: {sorted(ONCHAIN_FOCUS_SYMBOLS.keys())}", flush=True)
+
+    base_symbols = [str(sym).strip().upper() for sym in symbols if str(sym).strip()]
+    focus_symbols = [str(sym).strip().upper() for sym in ONCHAIN_FOCUS_SYMBOLS.keys() if str(sym).strip()]
+
+    merged = list(dict.fromkeys(base_symbols + focus_symbols))
+
+    if focus_symbols:
+        missing = sorted(set(focus_symbols) - set(base_symbols))
+        print(f"[ONCHAIN-FOCUS] 집중 감시 종목: {sorted(focus_symbols)}", flush=True)
+        if missing:
+            print(f"[ONCHAIN-FOCUS] Top 목록 밖 강제 추가: {missing}", flush=True)
+        print(f"[ONCHAIN-FOCUS] 병합 후 감시 종목 수: {len(base_symbols)} -> {len(merged)}", flush=True)
+
     return merged
 
 def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = None) -> List[dict]:
@@ -856,16 +860,6 @@ def analyze_onchain_chart_candidates() -> None:
 
 
 def run_onchain() -> None:
-    global onchain_running, LAST_ONCHAIN_LOOP_START, LAST_ONCHAIN_LOOP_END
-
-    # 중복 실행 방지: watchdog이 재시작하더라도 기존 subprocess와 겹치지 않게 막는다.
-    with ONCHAIN_LOCK:
-        if onchain_running:
-            print("[ONCHAIN] 이미 실행 중이라 이번 실행은 건너뜀", flush=True)
-            return
-        onchain_running = True
-        LAST_ONCHAIN_LOOP_START = time.time()
-
     print("[ONCHAIN] 시작", flush=True)
     try:
         cmd = [
@@ -908,10 +902,7 @@ def run_onchain() -> None:
     except Exception as e:
         print(f"[ONCHAIN] 오류: {e}", flush=True)
         traceback.print_exc()
-    finally:
-        with ONCHAIN_LOCK:
-            onchain_running = False
-            LAST_ONCHAIN_LOOP_END = time.time()
+
 
 def signal_loop() -> None:
     global LAST_CANDIDATE_CANDLE_TS
@@ -948,7 +939,8 @@ def signal_loop() -> None:
                 send_candidate_alert(picked, latest_candle_ts)
                 now = time.time()
                 for c in picked:
-                    last_alert_time[get_cooldown_key(c["symbol"], prefix="candidate")] = now
+                    prefix = "onchain_focus" if c.get("onchain_focus") else "candidate"
+                    last_alert_time[get_cooldown_key(c["symbol"], prefix=prefix)] = now
             else:
                 print("[CANDIDATE] 이번 5분봉 후보 없음", flush=True)
 
@@ -975,36 +967,7 @@ def onchain_loop() -> None:
         except Exception as e:
             print(f"onchain_loop 오류: {e}", flush=True)
             traceback.print_exc()
-            wait_sec = 30
         time.sleep(wait_sec)
-
-
-def ensure_onchain_thread(reason: str = "manual") -> None:
-    global onchain_thread, onchain_loop_started
-    if onchain_thread is not None and onchain_thread.is_alive():
-        return
-    print(f"[WATCHDOG] 온체인 루프 시작/재시작: reason={reason}", flush=True)
-    onchain_thread = threading.Thread(target=onchain_loop, daemon=True, name="onchain_loop")
-    onchain_thread.start()
-    onchain_loop_started = True
-
-
-def watchdog_loop() -> None:
-    while True:
-        try:
-            now = time.time()
-            alive = onchain_thread is not None and onchain_thread.is_alive()
-
-            if not alive:
-                ensure_onchain_thread(reason="thread_dead")
-            elif onchain_running and LAST_ONCHAIN_LOOP_START and (now - LAST_ONCHAIN_LOOP_START > 360):
-                print(f"[WATCHDOG] 온체인 실행 중: {now - LAST_ONCHAIN_LOOP_START:.0f}s 경과", flush=True)
-            elif (not onchain_running) and LAST_ONCHAIN_LOOP_END and (now - LAST_ONCHAIN_LOOP_END > ONCHAIN_STALE_SECONDS):
-                print(f"[WATCHDOG] 온체인 루프 지연 감지: 마지막 종료 후 {now - LAST_ONCHAIN_LOOP_END:.0f}s 경과", flush=True)
-        except Exception as e:
-            print(f"watchdog_loop 오류: {e}", flush=True)
-            traceback.print_exc()
-        time.sleep(ONCHAIN_WATCHDOG_INTERVAL)
 
 
 @app.route("/")
@@ -1047,7 +1010,7 @@ def health():
 
 
 def start_background_loops() -> None:
-    global spot_loop_started, onchain_loop_started, watchdog_loop_started
+    global spot_loop_started, onchain_loop_started
     try:
         update_symbols_if_needed(force=True)
         refresh_futures_ticker_cache_if_needed(force=True)
@@ -1056,16 +1019,12 @@ def start_background_loops() -> None:
 
     if not spot_loop_started:
         spot_loop_started = True
-        threading.Thread(target=signal_loop, daemon=True, name="signal_loop").start()
+        threading.Thread(target=signal_loop, daemon=True).start()
         print("시세 루프 시작 완료", flush=True)
-
-    ensure_onchain_thread(reason="startup")
-    print("온체인 루프 시작 완료", flush=True)
-
-    if not watchdog_loop_started:
-        watchdog_loop_started = True
-        threading.Thread(target=watchdog_loop, daemon=True, name="watchdog_loop").start()
-        print("온체인 watchdog 시작 완료", flush=True)
+    if not onchain_loop_started:
+        onchain_loop_started = True
+        threading.Thread(target=onchain_loop, daemon=True).start()
+        print("온체인 루프 시작 완료", flush=True)
 
 
 start_background_loops()
