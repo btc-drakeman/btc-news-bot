@@ -57,20 +57,20 @@ SIGNAL_INTERVAL_5M = "5m"
 TREND_INTERVAL_15M = "15m"
 ENV_INTERVAL_1H = "1h"
 
-CANDIDATE_MIN_SCORE = 6
+CANDIDATE_MIN_SCORE = 5
 CANDIDATE_MAX_PER_ALERT = 5
-MAX_RECENT_6C_SURGE = 4.5
-MAX_LAST2_MOVE = 1.2
+MAX_RECENT_6C_SURGE = 6.5
+MAX_LAST2_MOVE = 1.8
 MAX_BASIS_ABS = 0.35
-MIN_SUPPORT_TOUCHES = 4
+MIN_SUPPORT_TOUCHES = 3
 SUPPORT_BAND_PCT = 1.2
-COMPRESSION_RATIO_MAX = 0.85
-VOLUME_ALIVE_MIN = 0.75
-VOLUME_ALIVE_MAX = 1.80
+COMPRESSION_RATIO_MAX = 1.05
+VOLUME_ALIVE_MIN = 0.55
+VOLUME_ALIVE_MAX = 2.50
 WICK_TEST_MIN_RATIO = 0.45
 WICK_TEST_MAX_BODY = 0.45
 MAX_SINGLE_CANDLE_RANGE = 3.2
-RANGE_12C_MAX = 3.0
+RANGE_12C_MAX = 4.2
 RANGE_12C_BEST = 2.0
 MIN_RANGE_12C = 0.20
 MAX_RECENT12_TREND_ABS = 3.5
@@ -523,12 +523,12 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
     max_surge = 8.0 if relaxed else MAX_RECENT_6C_SURGE
     max_last2 = 2.4 if relaxed else MAX_LAST2_MOVE
     max_single = 5.5 if relaxed else MAX_SINGLE_CANDLE_RANGE
-    min_support = 2 if relaxed else MIN_SUPPORT_TOUCHES
+    min_support = 1 if relaxed else MIN_SUPPORT_TOUCHES
     vol_min = 0.45 if relaxed else VOLUME_ALIVE_MIN
     vol_max = 3.20 if relaxed else VOLUME_ALIVE_MAX
     max_basis = 0.80 if relaxed else MAX_BASIS_ABS
     max_above_support = 5.0 if relaxed else 2.8
-    min_score = 4 if relaxed else CANDIDATE_MIN_SCORE
+    min_score = 3 if relaxed else CANDIDATE_MIN_SCORE
 
     if recent12_range < min_range:
         return None
