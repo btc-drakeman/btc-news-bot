@@ -7,7 +7,7 @@ import subprocess
 from typing import Dict, List, Optional, Set, Tuple
 
 import requests
-from flask import Flask, abort, send_file
+from flask import Flask
 
 app = Flask(__name__)
 
@@ -24,6 +24,15 @@ last_alert_time: Dict[str, float] = {}
 spot_loop_started = False
 onchain_loop_started = False
 
+# 온체인 루프 안정화용 상태값
+onchain_thread: Optional[threading.Thread] = None
+onchain_running = False
+LAST_ONCHAIN_LOOP_START = 0.0
+LAST_ONCHAIN_LOOP_END = 0.0
+ONCHAIN_WATCHDOG_INTERVAL = 120
+ONCHAIN_STALE_SECONDS = 30 * 60
+ONCHAIN_LOCK = threading.Lock()
+
 CURRENT_SYMBOLS: List[str] = []
 LAST_SYMBOL_UPDATE_TIME = 0.0
 LAST_FUTURES_TICKER_TIME = 0.0
@@ -35,10 +44,6 @@ ONCHAIN_INTERVAL = 600
 CANDIDATE_ALERT_COOLDOWN = 7200
 ONCHAIN_CHART_COOLDOWN = 1800
 ONCHAIN_DETAIL_CSV = "seed_outflows_hub_candidates.csv"
-ONCHAIN_FLOW_CSV = "flow_exchange_hub_candidates.csv"
-ONCHAIN_FOCUS_TTL = 2 * 60 * 60  # 온체인 거래소 유입 후 2시간 집중 감시
-ONCHAIN_FOCUS_MAX_AGE = 12 * 60 * 60  # CSV에서 최근 12시간 이내 flow만 등록
-ONCHAIN_FOCUS_SYMBOLS: Dict[str, dict] = {}
 SYMBOL_REFRESH_INTERVAL = 900
 TOP_SYMBOL_COUNT = 50
 FUTURES_TICKER_REFRESH_INTERVAL = 20
@@ -72,83 +77,6 @@ ENV_1H_COMPRESSION_MAX = 1.25
 ONCHAIN_MIN_SHARED = 3
 ONCHAIN_MIN_SCORE = 18
 ALLOWED_PROTOCOL_SWAP_ACTIONS = {"BUY", "SELL", "SWAP"}
-
-DOWNLOADABLE_ONCHAIN_FILES = {
-    "hub_candidates.csv": "전체 허브 후보 랭킹",
-    "seed_outflows_hub_candidates.csv": "시드 출금 상세",
-    "flow_exchange_hub_candidates.csv": "flow 거래소 도착 결과",
-    "active_hubs_hub_candidates.csv": "현재 활성 허브 목록",
-    "active_hub_events_hub_candidates.csv": "활성 허브 이벤트",
-    "repeat_wallets.db": "SQLite 원본 DB",
-    "address_book.json": "수동 거래소 주소록",
-}
-
-
-def get_file_size_text(path: str) -> str:
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return "-"
-    if size >= 1024 * 1024:
-        return f"{size / (1024 * 1024):.2f} MB"
-    if size >= 1024:
-        return f"{size / 1024:.1f} KB"
-    return f"{size} B"
-
-
-def build_onchain_files_html() -> str:
-    rows = []
-    for filename, desc in DOWNLOADABLE_ONCHAIN_FILES.items():
-        exists = os.path.exists(filename)
-        size = get_file_size_text(filename) if exists else "not created yet"
-        updated = "-"
-        if exists:
-            updated = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(filename)))
-        if exists:
-            action = (
-                f'<a href="/download/{filename}">download</a> '
-                f'<a href="/view/{filename}">view</a>'
-            )
-        else:
-            action = "-"
-        rows.append(
-            f"<tr>"
-            f"<td>{filename}</td>"
-            f"<td>{desc}</td>"
-            f"<td>{size}</td>"
-            f"<td>{updated}</td>"
-            f"<td>{action}</td>"
-            f"</tr>"
-        )
-
-    return f"""
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <title>Onchain Files</title>
-      <style>
-        body {{ font-family: Arial, sans-serif; padding: 24px; }}
-        table {{ border-collapse: collapse; width: 100%; }}
-        th, td {{ border: 1px solid #ddd; padding: 8px; font-size: 14px; }}
-        th {{ background: #f3f3f3; }}
-      </style>
-    </head>
-    <body>
-      <h2>Onchain generated files</h2>
-      <p>CSV 안의 지갑주소 필드는 축약하지 않은 풀주소 기준으로 저장됩니다.</p>
-      <table>
-        <thead>
-          <tr><th>file</th><th>description</th><th>size</th><th>updated</th><th>action</th></tr>
-        </thead>
-        <tbody>
-          {''.join(rows)}
-        </tbody>
-      </table>
-      <p>CSV 파일은 Excel 또는 Google Sheets로 열면 주소를 풀주소로 확인할 수 있습니다.</p>
-    </body>
-    </html>
-    """
 
 
 def send_telegram(msg: str) -> None:
@@ -419,7 +347,7 @@ def is_1h_environment_ok(candles_1h: List[dict]) -> Tuple[bool, str, dict]:
     }
 
 
-def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, relaxed: bool = False) -> Optional[dict]:
+def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None) -> Optional[dict]:
     data_5m = get_kline(symbol, interval=SIGNAL_INTERVAL_5M, limit=50)
     data_15m = get_kline(symbol, interval=TREND_INTERVAL_15M, limit=20)
     data_1h = get_kline(symbol, interval=ENV_INTERVAL_1H, limit=10)
@@ -505,44 +433,29 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
         reasons.append(env_reason)
 
     # 제거 조건
-    # relaxed=True는 온체인 거래소 유입이 확인된 코인만 적용한다.
-    # 온체인을 AND 조건으로 더하는 게 아니라, 해당 코인의 차트 조건을 약간 완화해 관찰 빈도를 높인다.
-    min_range = 0.05 if relaxed else MIN_RANGE_12C
-    max_range = 5.5 if relaxed else RANGE_12C_MAX
-    max_trend = 6.0 if relaxed else MAX_RECENT12_TREND_ABS
-    max_surge = 8.0 if relaxed else MAX_RECENT_6C_SURGE
-    max_last2 = 2.4 if relaxed else MAX_LAST2_MOVE
-    max_single = 5.5 if relaxed else MAX_SINGLE_CANDLE_RANGE
-    min_support = 2 if relaxed else MIN_SUPPORT_TOUCHES
-    vol_min = 0.45 if relaxed else VOLUME_ALIVE_MIN
-    vol_max = 3.20 if relaxed else VOLUME_ALIVE_MAX
-    max_basis = 0.80 if relaxed else MAX_BASIS_ABS
-    max_above_support = 5.0 if relaxed else 2.8
-    min_score = 4 if relaxed else CANDIDATE_MIN_SCORE
-
-    if recent12_range < min_range:
+    if recent12_range < MIN_RANGE_12C:
         return None
-    if recent12_range > max_range:
+    if recent12_range > RANGE_12C_MAX:
         return None
-    if recent12_move > max_trend:
+    if recent12_move > MAX_RECENT12_TREND_ABS:
         return None
-    if recent6_surge > max_surge:
+    if recent6_surge > MAX_RECENT_6C_SURGE:
         return None
-    if last2_move > max_last2:
+    if last2_move > MAX_LAST2_MOVE:
         return None
-    if max_single_range > max_single:
+    if max_single_range > MAX_SINGLE_CANDLE_RANGE:
         return None
-    if support_touches < min_support:
+    if support_touches < MIN_SUPPORT_TOUCHES:
         return None
-    if volume_ratio < vol_min or volume_ratio > vol_max:
+    if volume_ratio < VOLUME_ALIVE_MIN or volume_ratio > VOLUME_ALIVE_MAX:
         return None
-    if basis_pct is not None and abs(basis_pct) > max_basis:
+    if basis_pct is not None and abs(basis_pct) > MAX_BASIS_ABS:
         return None
-    if price_above_support > max_above_support:
+    if price_above_support > 2.8:
         return None
-    if not relaxed and not env_ok:
+    if not env_ok:
         return None
-    if score < min_score:
+    if score < CANDIDATE_MIN_SCORE:
         return None
 
     return {
@@ -564,7 +477,6 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
         "last_close": recent12[-1]["close"],
         "support_low": support_low,
         "candidate_candle_ts": recent12[-1]["ts"],
-        "relaxed": relaxed,
         **env_stats,
     }
 
@@ -587,16 +499,11 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
     lines = [f"[TOP50 매집 후보] {len(candidates)}개"]
     for idx, c in enumerate(candidates[:CANDIDATE_MAX_PER_ALERT], 1):
         reason_text = ", ".join(c["reasons"][:5])
-        focus = c.get("onchain_focus") or {}
-        prefix = "[온체인집중] " if focus else ""
-        focus_line = ""
-        if focus:
-            focus_line = f"\n   온체인: {focus.get('token', '-')} → {focus.get('exchange', '-')} / {focus.get('end_time_utc', '-')}"
         lines.append(
-            f"{idx}. {prefix}{c['symbol']} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
+            f"{idx}. {c['symbol']} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
             f"12봉범위={c['recent12_range']:.2f}% | 6봉합={c['recent6_surge']:.2f}% | 직전2봉={c['last2_move']:.2f}% | "
             f"압축={c['compression_ratio']:.2f} | 거래량={c['volume_ratio']:.2f}x | 지지={c['support_touches']}회\n"
-            f"   이유: {reason_text}{focus_line}"
+            f"   이유: {reason_text}"
         )
 
     lines.append("※ 이 알림은 진입 신호가 아니라 '아직 안 터진 후보' 스캔 결과")
@@ -604,95 +511,23 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
     send_telegram("\n".join(lines))
 
 
-
-def parse_utc_ts(text: str) -> int:
-    try:
-        return int(time.mktime(time.strptime(text.strip(), "%Y-%m-%d %H:%M:%S")))
-    except Exception:
-        return 0
-
-
-def cleanup_onchain_focus_symbols() -> None:
-    now = time.time()
-    expired = [sym for sym, info in ONCHAIN_FOCUS_SYMBOLS.items() if float(info.get("expires_at", 0)) <= now]
-    for sym in expired:
-        ONCHAIN_FOCUS_SYMBOLS.pop(sym, None)
-
-
-def register_onchain_focus_symbol(symbol: str, source: dict) -> None:
-    symbol = (symbol or "").strip().upper()
-    if not symbol.endswith("USDT"):
-        return
-    now = time.time()
-    prev = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
-    ONCHAIN_FOCUS_SYMBOLS[symbol] = {
-        "expires_at": max(float(prev.get("expires_at", 0)), now + ONCHAIN_FOCUS_TTL),
-        "token": source.get("token_symbol", symbol.replace("USDT", "")),
-        "exchange": source.get("exchange", "-"),
-        "end_time_utc": source.get("end_time_utc", "-"),
-        "path": source.get("path_addresses") or source.get("path") or "-",
-    }
-    print(f"[ONCHAIN-FOCUS] 등록/연장: {symbol} until={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ONCHAIN_FOCUS_SYMBOLS[symbol]['expires_at']))}", flush=True)
-
-
-def update_onchain_focus_from_flow_csv(path: str = ONCHAIN_FLOW_CSV) -> None:
-    cleanup_onchain_focus_symbols()
-    if not os.path.exists(path):
-        print(f"[ONCHAIN-FOCUS] flow CSV 없음: {path}", flush=True)
-        return
-    try:
-        spot_map = get_spot_symbols()
-        now = time.time()
-        added = 0
-        with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                token = (row.get("token_symbol") or "").strip().upper()
-                if not token or token in STABLE_EXCLUDED or token.startswith("V"):
-                    continue
-                end_ts = parse_utc_ts(row.get("end_time_utc") or row.get("start_time_utc") or "")
-                if end_ts and now - end_ts > ONCHAIN_FOCUS_MAX_AGE:
-                    continue
-                symbol = token_to_symbol(token, spot_map)
-                if not symbol:
-                    continue
-                register_onchain_focus_symbol(symbol, row)
-                added += 1
-        print(f"[ONCHAIN-FOCUS] flow CSV 반영 완료: {added}건 / 현재 {len(ONCHAIN_FOCUS_SYMBOLS)}개", flush=True)
-    except Exception as e:
-        print(f"[ONCHAIN-FOCUS] CSV 반영 오류: {e}", flush=True)
-        traceback.print_exc()
-
-
-def get_scan_symbols_with_focus(symbols: List[str]) -> List[str]:
-    cleanup_onchain_focus_symbols()
-    merged = list(dict.fromkeys(list(symbols) + list(ONCHAIN_FOCUS_SYMBOLS.keys())))
-    if ONCHAIN_FOCUS_SYMBOLS:
-        print(f"[ONCHAIN-FOCUS] 집중 감시 종목: {sorted(ONCHAIN_FOCUS_SYMBOLS.keys())}", flush=True)
-    return merged
-
 def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = None) -> List[dict]:
     candidates: List[dict] = []
     for symbol in symbols:
         try:
-            is_focus = symbol in ONCHAIN_FOCUS_SYMBOLS
-            candidate = detect_candidate(symbol, ticker_map=ticker_map, relaxed=is_focus)
+            candidate = detect_candidate(symbol, ticker_map=ticker_map)
             if not candidate:
-                label = "온체인집중 제외" if is_focus else "제외"
-                print(f"[CANDIDATE] {symbol} | {label}", flush=True)
+                print(f"[CANDIDATE] {symbol} | 제외", flush=True)
                 continue
-            if is_focus:
-                candidate["onchain_focus"] = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
 
-            key = get_cooldown_key(symbol, prefix="onchain_focus" if is_focus else "candidate")
+            key = get_cooldown_key(symbol, prefix="candidate")
             last_time = last_alert_time.get(key, 0.0)
             if time.time() - last_time < CANDIDATE_ALERT_COOLDOWN:
                 print(f"[CANDIDATE] {symbol} | 쿨다운", flush=True)
                 continue
 
-            focus_tag = "[ONCHAIN-FOCUS] " if symbol in ONCHAIN_FOCUS_SYMBOLS else ""
             print(
-                f"[CANDIDATE] {focus_tag}{symbol} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
+                f"[CANDIDATE] {symbol} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
                 f"12봉범위={candidate['recent12_range']:.2f}% | 6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
                 f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | 지지={candidate['support_touches']}회",
                 flush=True,
@@ -846,6 +681,16 @@ def analyze_onchain_chart_candidates() -> None:
 
 
 def run_onchain() -> None:
+    global onchain_running, LAST_ONCHAIN_LOOP_START, LAST_ONCHAIN_LOOP_END
+
+    # 중복 실행 방지: watchdog이 재시작하더라도 기존 subprocess와 겹치지 않게 막는다.
+    with ONCHAIN_LOCK:
+        if onchain_running:
+            print("[ONCHAIN] 이미 실행 중이라 이번 실행은 건너뜀", flush=True)
+            return
+        onchain_running = True
+        LAST_ONCHAIN_LOOP_START = time.time()
+
     print("[ONCHAIN] 시작", flush=True)
     try:
         cmd = [
@@ -888,7 +733,10 @@ def run_onchain() -> None:
     except Exception as e:
         print(f"[ONCHAIN] 오류: {e}", flush=True)
         traceback.print_exc()
-
+    finally:
+        with ONCHAIN_LOCK:
+            onchain_running = False
+            LAST_ONCHAIN_LOOP_END = time.time()
 
 def signal_loop() -> None:
     global LAST_CANDIDATE_CANDLE_TS
@@ -899,7 +747,6 @@ def signal_loop() -> None:
             print("=" * 60, flush=True)
             print(f"[SIGNAL LOOP START] {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
             symbols = update_symbols_if_needed()
-            symbols = get_scan_symbols_with_focus(symbols)
             ticker_map = refresh_futures_ticker_cache_if_needed(force=True)
             print(f"최종 감시 종목({len(symbols)}개): {symbols}", flush=True)
 
@@ -952,41 +799,41 @@ def onchain_loop() -> None:
         except Exception as e:
             print(f"onchain_loop 오류: {e}", flush=True)
             traceback.print_exc()
+            wait_sec = 30
         time.sleep(wait_sec)
+
+
+def ensure_onchain_thread(reason: str = "manual") -> None:
+    global onchain_thread, onchain_loop_started
+    if onchain_thread is not None and onchain_thread.is_alive():
+        return
+    print(f"[WATCHDOG] 온체인 루프 시작/재시작: reason={reason}", flush=True)
+    onchain_thread = threading.Thread(target=onchain_loop, daemon=True, name="onchain_loop")
+    onchain_thread.start()
+    onchain_loop_started = True
+
+
+def watchdog_loop() -> None:
+    while True:
+        try:
+            now = time.time()
+            alive = onchain_thread is not None and onchain_thread.is_alive()
+
+            if not alive:
+                ensure_onchain_thread(reason="thread_dead")
+            elif onchain_running and LAST_ONCHAIN_LOOP_START and (now - LAST_ONCHAIN_LOOP_START > 360):
+                print(f"[WATCHDOG] 온체인 실행 중: {now - LAST_ONCHAIN_LOOP_START:.0f}s 경과", flush=True)
+            elif (not onchain_running) and LAST_ONCHAIN_LOOP_END and (now - LAST_ONCHAIN_LOOP_END > ONCHAIN_STALE_SECONDS):
+                print(f"[WATCHDOG] 온체인 루프 지연 감지: 마지막 종료 후 {now - LAST_ONCHAIN_LOOP_END:.0f}s 경과", flush=True)
+        except Exception as e:
+            print(f"watchdog_loop 오류: {e}", flush=True)
+            traceback.print_exc()
+        time.sleep(ONCHAIN_WATCHDOG_INTERVAL)
 
 
 @app.route("/")
 def home():
-    return (
-        "bot is running<br>"
-        "onchain files: <a href='/files'>/files</a><br>"
-        "health: <a href='/health'>/health</a>"
-    ), 200
-
-
-@app.route("/files")
-def files_page():
-    return build_onchain_files_html(), 200
-
-
-@app.route("/download/<path:filename>")
-def download_onchain_file(filename: str):
-    if filename not in DOWNLOADABLE_ONCHAIN_FILES:
-        abort(404)
-    if not os.path.exists(filename):
-        abort(404)
-    return send_file(os.path.abspath(filename), as_attachment=True, download_name=filename)
-
-
-@app.route("/view/<path:filename>")
-def view_onchain_file(filename: str):
-    if filename not in DOWNLOADABLE_ONCHAIN_FILES:
-        abort(404)
-    if not os.path.exists(filename):
-        abort(404)
-    if filename.endswith(".db"):
-        abort(400)
-    return send_file(os.path.abspath(filename), mimetype="text/plain; charset=utf-8")
+    return "bot is running", 200
 
 
 @app.route("/health")
@@ -994,8 +841,11 @@ def health():
     return "ok", 200
 
 
+watchdog_loop_started = False
+
+
 def start_background_loops() -> None:
-    global spot_loop_started, onchain_loop_started
+    global spot_loop_started, onchain_loop_started, watchdog_loop_started
     try:
         update_symbols_if_needed(force=True)
         refresh_futures_ticker_cache_if_needed(force=True)
@@ -1004,12 +854,16 @@ def start_background_loops() -> None:
 
     if not spot_loop_started:
         spot_loop_started = True
-        threading.Thread(target=signal_loop, daemon=True).start()
+        threading.Thread(target=signal_loop, daemon=True, name="signal_loop").start()
         print("시세 루프 시작 완료", flush=True)
-    if not onchain_loop_started:
-        onchain_loop_started = True
-        threading.Thread(target=onchain_loop, daemon=True).start()
-        print("온체인 루프 시작 완료", flush=True)
+
+    ensure_onchain_thread(reason="startup")
+    print("온체인 루프 시작 완료", flush=True)
+
+    if not watchdog_loop_started:
+        watchdog_loop_started = True
+        threading.Thread(target=watchdog_loop, daemon=True, name="watchdog_loop").start()
+        print("온체인 watchdog 시작 완료", flush=True)
 
 
 start_background_loops()
