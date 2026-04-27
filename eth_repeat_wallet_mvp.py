@@ -64,6 +64,12 @@ DEFAULT_IGNORE_ADDRESSES = {
 EXCHANGE_WALLETS: Dict[str, str] = {}
 ROUTER_OR_PROTOCOL_ADDRESSES: Dict[str, str] = {}
 IGNORE_ADDRESSES: Set[str] = set()
+
+# Contract filtering cache: Etherscan getsourcecode is used only for hub candidates,
+# so we do not waste API calls on every transfer row.
+CONTRACT_ADDRESS_CACHE: Dict[str, bool] = {}
+CONTRACT_FILTER_ENABLED = os.getenv("ONCHAIN_FILTER_CONTRACTS", "1") != "0"
+
 ADDRESS_BOOK_STATE = {
     "path": None,
     "last_mtime": None,
@@ -426,6 +432,72 @@ def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
         raise RuntimeError(f"Etherscan error: message={message} result={result}")
 
     return data
+
+
+def is_contract_address(address: str, chainid: str = "1") -> bool:
+    """Return True if address is a smart contract.
+
+    Uses Etherscan getsourcecode only for final hub candidates / active hub decisions.
+    If the lookup fails, we return False to avoid accidentally dropping a real wallet.
+    """
+    address = normalize(address)
+    if not CONTRACT_FILTER_ENABLED:
+        return False
+    if not address or address in IGNORE_ADDRESSES or address in EXCHANGE_WALLETS:
+        return False
+    if address in ROUTER_OR_PROTOCOL_ADDRESSES:
+        return True
+    if address in CONTRACT_ADDRESS_CACHE:
+        return CONTRACT_ADDRESS_CACHE[address]
+
+    try:
+        data = etherscan_get(
+            {
+                "chainid": chainid,
+                "module": "contract",
+                "action": "getsourcecode",
+                "address": address,
+            },
+            timeout=10,
+        )
+        result = data.get("result", []) or []
+        item = result[0] if isinstance(result, list) and result else {}
+        contract_name = str(item.get("ContractName") or "").strip()
+        abi = str(item.get("ABI") or "").strip()
+        source = str(item.get("SourceCode") or "").strip()
+
+        # EOA usually has empty ContractName, empty SourceCode, and ABI == "Contract source code not verified".
+        is_contract = bool(contract_name or source or (abi and abi != "Contract source code not verified"))
+        CONTRACT_ADDRESS_CACHE[address] = is_contract
+        if is_contract:
+            print(f"[FILTER] contract 제외 예정: {address} ({contract_name or 'contract'})", flush=True)
+        return is_contract
+    except Exception as e:
+        print(f"[FILTER] contract 조회 실패, 지갑으로 간주: {address} | {e}", flush=True)
+        CONTRACT_ADDRESS_CACHE[address] = False
+        return False
+
+
+def filter_contract_hub_rows(rows: List[dict], chainid: str) -> List[dict]:
+    if not CONTRACT_FILTER_ENABLED or not rows:
+        return rows
+    filtered: List[dict] = []
+    removed = 0
+    for row in rows:
+        address = normalize(row.get("address") or "")
+        target_kind = row.get("target_kind") or "unknown"
+        # Keep known exchanges/protocols in the ranking output. Protocols are already blocked from active hub registration.
+        if target_kind in {"exchange", "protocol", "ignore"}:
+            filtered.append(row)
+            continue
+        if is_contract_address(address, chainid=chainid):
+            removed += 1
+            row["target_kind"] = "contract"
+            row["target_label"] = row.get("target_label") or "CONTRACT"
+            continue
+        filtered.append(row)
+    print(f"[FILTER] contract hub 후보 제외: {removed}/{len(rows)}", flush=True)
+    return filtered
 
 def guess_exchange_label_from_metadata(nametag: str, labels: List[str]) -> str:
     joined = " | ".join([nametag or ""] + list(labels or [])).lower()
@@ -871,6 +943,7 @@ def build_hub_scores(
         if uniq_hits:
             row["score"] += 5
 
+    results = filter_contract_hub_rows(results, chainid=chainid)
     results.sort(key=lambda x: (-x["score"], -x["shared_seed_count"], -x["total_interactions"]))
     return results
 
@@ -1299,7 +1372,11 @@ def select_flow_expansion_addresses(
         kind, _ = classify_address(to_addr)
         if to_addr in seeds_set or to_addr in seen:
             continue
-        if kind in {"ignore", "exchange"}:
+        if kind in {"ignore", "exchange", "protocol", "contract"}:
+            continue
+        if is_contract_address(addr, chainid="1"):
+            continue
+        if is_contract_address(to_addr, chainid="1"):
             continue
         hub = candidate_map.get(to_addr)
         if hub:
@@ -1596,7 +1673,10 @@ def activate_hubs_from_candidates(
         target_kind = row.get("target_kind") or "unknown"
         if address in IGNORE_ADDRESSES:
             continue
-        if target_kind in {"ignore", "exchange", "protocol"}:
+        if target_kind in {"ignore", "exchange", "protocol", "contract"}:
+            continue
+        if is_contract_address(address, chainid=chainid):
+            print(f"[HUB] contract 주소라 active hub 등록 제외: {address}", flush=True)
             continue
         if shared < min_shared or score < min_score:
             continue
