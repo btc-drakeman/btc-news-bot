@@ -7,7 +7,7 @@ import subprocess
 from typing import Dict, List, Optional, Set, Tuple
 
 import requests
-from flask import Flask
+from flask import Flask, abort, send_file
 
 app = Flask(__name__)
 
@@ -68,6 +68,83 @@ ENV_1H_COMPRESSION_MAX = 1.25
 ONCHAIN_MIN_SHARED = 3
 ONCHAIN_MIN_SCORE = 18
 ALLOWED_PROTOCOL_SWAP_ACTIONS = {"BUY", "SELL", "SWAP"}
+
+DOWNLOADABLE_ONCHAIN_FILES = {
+    "hub_candidates.csv": "전체 허브 후보 랭킹",
+    "seed_outflows_hub_candidates.csv": "시드 출금 상세",
+    "flow_exchange_hub_candidates.csv": "flow 거래소 도착 결과",
+    "active_hubs_hub_candidates.csv": "현재 활성 허브 목록",
+    "active_hub_events_hub_candidates.csv": "활성 허브 이벤트",
+    "repeat_wallets.db": "SQLite 원본 DB",
+    "address_book.json": "수동 거래소 주소록",
+}
+
+
+def get_file_size_text(path: str) -> str:
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return "-"
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.2f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size} B"
+
+
+def build_onchain_files_html() -> str:
+    rows = []
+    for filename, desc in DOWNLOADABLE_ONCHAIN_FILES.items():
+        exists = os.path.exists(filename)
+        size = get_file_size_text(filename) if exists else "not created yet"
+        updated = "-"
+        if exists:
+            updated = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(filename)))
+        if exists:
+            action = (
+                f'<a href="/download/{filename}">download</a> '
+                f'<a href="/view/{filename}">view</a>'
+            )
+        else:
+            action = "-"
+        rows.append(
+            f"<tr>"
+            f"<td>{filename}</td>"
+            f"<td>{desc}</td>"
+            f"<td>{size}</td>"
+            f"<td>{updated}</td>"
+            f"<td>{action}</td>"
+            f"</tr>"
+        )
+
+    return f"""
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Onchain Files</title>
+      <style>
+        body {{ font-family: Arial, sans-serif; padding: 24px; }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 8px; font-size: 14px; }}
+        th {{ background: #f3f3f3; }}
+      </style>
+    </head>
+    <body>
+      <h2>Onchain generated files</h2>
+      <p>CSV 안의 지갑주소 필드는 축약하지 않은 풀주소 기준으로 저장됩니다.</p>
+      <table>
+        <thead>
+          <tr><th>file</th><th>description</th><th>size</th><th>updated</th><th>action</th></tr>
+        </thead>
+        <tbody>
+          {''.join(rows)}
+        </tbody>
+      </table>
+      <p>CSV 파일은 Excel 또는 Google Sheets로 열면 주소를 풀주소로 확인할 수 있습니다.</p>
+    </body>
+    </html>
+    """
 
 
 def send_telegram(msg: str) -> None:
@@ -783,7 +860,36 @@ def onchain_loop() -> None:
 
 @app.route("/")
 def home():
-    return "bot is running", 200
+    return (
+        "bot is running<br>"
+        "onchain files: <a href='/files'>/files</a><br>"
+        "health: <a href='/health'>/health</a>"
+    ), 200
+
+
+@app.route("/files")
+def files_page():
+    return build_onchain_files_html(), 200
+
+
+@app.route("/download/<path:filename>")
+def download_onchain_file(filename: str):
+    if filename not in DOWNLOADABLE_ONCHAIN_FILES:
+        abort(404)
+    if not os.path.exists(filename):
+        abort(404)
+    return send_file(os.path.abspath(filename), as_attachment=True, download_name=filename)
+
+
+@app.route("/view/<path:filename>")
+def view_onchain_file(filename: str):
+    if filename not in DOWNLOADABLE_ONCHAIN_FILES:
+        abort(404)
+    if not os.path.exists(filename):
+        abort(404)
+    if filename.endswith(".db"):
+        abort(400)
+    return send_file(os.path.abspath(filename), mimetype="text/plain; charset=utf-8")
 
 
 @app.route("/health")
