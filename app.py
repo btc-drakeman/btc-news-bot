@@ -681,9 +681,13 @@ def run_onchain() -> None:
             "--seeds", "seed_addresses.txt",
             "--chainid", "1",
             "--days", "30",
+            "--max-pages", "1",
             "--address-book", "address_book.json",
             "--enable-flow",
+            "--flow-expand-max-pages", "1",
             "--enable-active-hubs",
+            "--active-hub-max-track", "10",
+            "--active-hub-scan-max-pages", "1",
         ]
 
         print(f"[ONCHAIN] 실행 명령: {' '.join(cmd)}", flush=True)
@@ -691,7 +695,7 @@ def run_onchain() -> None:
 
         eth = subprocess.run(
             cmd,
-            timeout=180,
+            timeout=300,
         )
 
         print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
@@ -706,7 +710,7 @@ def run_onchain() -> None:
         print("[ONCHAIN] 종료", flush=True)
 
     except subprocess.TimeoutExpired:
-        print("[ONCHAIN] TIMEOUT: 180초 초과로 강제 종료", flush=True)
+        print("[ONCHAIN] TIMEOUT: 300초 초과로 강제 종료", flush=True)
         traceback.print_exc()
     except Exception as e:
         print(f"[ONCHAIN] 오류: {e}", flush=True)
