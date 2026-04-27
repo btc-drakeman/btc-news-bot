@@ -85,7 +85,7 @@ DEBUG_ONCHAIN = os.getenv("ONCHAIN_DEBUG", "1") != "0"
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("ONCHAIN_REQUEST_TIMEOUT", "15"))
 
 CONTRACT_KIND_CACHE: Dict[str, bool] = {}
-CONTRACT_CHECK_ENABLED = os.getenv("ONCHAIN_CONTRACT_CHECK", "1") != "0"
+CONTRACT_CHECK_ENABLED = os.getenv("ONCHAIN_CONTRACT_CHECK", "0") != "0"  # 기본 OFF: getsourcecode 폭주 방지
 
 
 def dbg(msg: str) -> None:
