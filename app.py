@@ -674,33 +674,40 @@ def analyze_onchain_chart_candidates() -> None:
 def run_onchain() -> None:
     print("[ONCHAIN] 시작", flush=True)
     try:
+        cmd = [
+            "python",
+            "-u",
+            "eth_repeat_wallet_mvp.py",
+            "--seeds", "seed_addresses.txt",
+            "--chainid", "1",
+            "--days", "30",
+            "--address-book", "address_book.json",
+            "--enable-flow",
+            "--enable-active-hubs",
+        ]
+
+        print(f"[ONCHAIN] 실행 명령: {' '.join(cmd)}", flush=True)
+        print("[ONCHAIN] 자동 거래소 주소 확장 OFF: address_book.json 수동 주소만 사용", flush=True)
+
         eth = subprocess.run(
-            [
-                "python",
-                "eth_repeat_wallet_mvp.py",
-                "--seeds", "seed_addresses.txt",
-                "--chainid", "1",
-                "--days", "30",
-                "--address-book", "address_book.json",
-                "--enable-flow",
-                "--enable-active-hubs",
-                "--auto-exchange-enrich",
-            ],
-            capture_output=True,
-            text=True,
+            cmd,
+            timeout=180,
         )
-        if eth.stdout:
-            print(eth.stdout, flush=True)
-        if eth.stderr:
-            print(eth.stderr, flush=True)
+
         print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
 
         if eth.returncode == 0:
             # 차트 후보 알림([TOP50 매집 후보])은 signal_loop에서 독립적으로 전송한다.
             # 온체인 결합 후보([ONCHAIN+TOP50 후보])는 중복 방지를 위해 비활성화한다.
             print("[ONCHAIN-CHART] 비활성화: 차트 후보 알림은 signal_loop에서만 전송", flush=True)
+        else:
+            print("[ONCHAIN] eth_repeat_wallet_mvp.py 비정상 종료", flush=True)
 
         print("[ONCHAIN] 종료", flush=True)
+
+    except subprocess.TimeoutExpired:
+        print("[ONCHAIN] TIMEOUT: 180초 초과로 강제 종료", flush=True)
+        traceback.print_exc()
     except Exception as e:
         print(f"[ONCHAIN] 오류: {e}", flush=True)
         traceback.print_exc()
