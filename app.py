@@ -35,6 +35,10 @@ ONCHAIN_INTERVAL = 600
 CANDIDATE_ALERT_COOLDOWN = 7200
 ONCHAIN_CHART_COOLDOWN = 1800
 ONCHAIN_DETAIL_CSV = "seed_outflows_hub_candidates.csv"
+ONCHAIN_FLOW_CSV = "flow_exchange_hub_candidates.csv"
+ONCHAIN_FOCUS_TTL = 2 * 60 * 60  # 온체인 거래소 유입 후 2시간 집중 감시
+ONCHAIN_FOCUS_MAX_AGE = 12 * 60 * 60  # CSV에서 최근 12시간 이내 flow만 등록
+ONCHAIN_FOCUS_SYMBOLS: Dict[str, dict] = {}
 SYMBOL_REFRESH_INTERVAL = 900
 TOP_SYMBOL_COUNT = 50
 FUTURES_TICKER_REFRESH_INTERVAL = 20
@@ -415,7 +419,7 @@ def is_1h_environment_ok(candles_1h: List[dict]) -> Tuple[bool, str, dict]:
     }
 
 
-def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None) -> Optional[dict]:
+def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, relaxed: bool = False) -> Optional[dict]:
     data_5m = get_kline(symbol, interval=SIGNAL_INTERVAL_5M, limit=50)
     data_15m = get_kline(symbol, interval=TREND_INTERVAL_15M, limit=20)
     data_1h = get_kline(symbol, interval=ENV_INTERVAL_1H, limit=10)
@@ -501,29 +505,44 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None) 
         reasons.append(env_reason)
 
     # 제거 조건
-    if recent12_range < MIN_RANGE_12C:
+    # relaxed=True는 온체인 거래소 유입이 확인된 코인만 적용한다.
+    # 온체인을 AND 조건으로 더하는 게 아니라, 해당 코인의 차트 조건을 약간 완화해 관찰 빈도를 높인다.
+    min_range = 0.05 if relaxed else MIN_RANGE_12C
+    max_range = 5.5 if relaxed else RANGE_12C_MAX
+    max_trend = 6.0 if relaxed else MAX_RECENT12_TREND_ABS
+    max_surge = 8.0 if relaxed else MAX_RECENT_6C_SURGE
+    max_last2 = 2.4 if relaxed else MAX_LAST2_MOVE
+    max_single = 5.5 if relaxed else MAX_SINGLE_CANDLE_RANGE
+    min_support = 2 if relaxed else MIN_SUPPORT_TOUCHES
+    vol_min = 0.45 if relaxed else VOLUME_ALIVE_MIN
+    vol_max = 3.20 if relaxed else VOLUME_ALIVE_MAX
+    max_basis = 0.80 if relaxed else MAX_BASIS_ABS
+    max_above_support = 5.0 if relaxed else 2.8
+    min_score = 4 if relaxed else CANDIDATE_MIN_SCORE
+
+    if recent12_range < min_range:
         return None
-    if recent12_range > RANGE_12C_MAX:
+    if recent12_range > max_range:
         return None
-    if recent12_move > MAX_RECENT12_TREND_ABS:
+    if recent12_move > max_trend:
         return None
-    if recent6_surge > MAX_RECENT_6C_SURGE:
+    if recent6_surge > max_surge:
         return None
-    if last2_move > MAX_LAST2_MOVE:
+    if last2_move > max_last2:
         return None
-    if max_single_range > MAX_SINGLE_CANDLE_RANGE:
+    if max_single_range > max_single:
         return None
-    if support_touches < MIN_SUPPORT_TOUCHES:
+    if support_touches < min_support:
         return None
-    if volume_ratio < VOLUME_ALIVE_MIN or volume_ratio > VOLUME_ALIVE_MAX:
+    if volume_ratio < vol_min or volume_ratio > vol_max:
         return None
-    if basis_pct is not None and abs(basis_pct) > MAX_BASIS_ABS:
+    if basis_pct is not None and abs(basis_pct) > max_basis:
         return None
-    if price_above_support > 2.8:
+    if price_above_support > max_above_support:
         return None
-    if not env_ok:
+    if not relaxed and not env_ok:
         return None
-    if score < CANDIDATE_MIN_SCORE:
+    if score < min_score:
         return None
 
     return {
@@ -545,6 +564,7 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None) 
         "last_close": recent12[-1]["close"],
         "support_low": support_low,
         "candidate_candle_ts": recent12[-1]["ts"],
+        "relaxed": relaxed,
         **env_stats,
     }
 
@@ -567,11 +587,16 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
     lines = [f"[TOP50 매집 후보] {len(candidates)}개"]
     for idx, c in enumerate(candidates[:CANDIDATE_MAX_PER_ALERT], 1):
         reason_text = ", ".join(c["reasons"][:5])
+        focus = c.get("onchain_focus") or {}
+        prefix = "[온체인집중] " if focus else ""
+        focus_line = ""
+        if focus:
+            focus_line = f"\n   온체인: {focus.get('token', '-')} → {focus.get('exchange', '-')} / {focus.get('end_time_utc', '-')}"
         lines.append(
-            f"{idx}. {c['symbol']} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
+            f"{idx}. {prefix}{c['symbol']} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
             f"12봉범위={c['recent12_range']:.2f}% | 6봉합={c['recent6_surge']:.2f}% | 직전2봉={c['last2_move']:.2f}% | "
             f"압축={c['compression_ratio']:.2f} | 거래량={c['volume_ratio']:.2f}x | 지지={c['support_touches']}회\n"
-            f"   이유: {reason_text}"
+            f"   이유: {reason_text}{focus_line}"
         )
 
     lines.append("※ 이 알림은 진입 신호가 아니라 '아직 안 터진 후보' 스캔 결과")
@@ -579,23 +604,95 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
     send_telegram("\n".join(lines))
 
 
+
+def parse_utc_ts(text: str) -> int:
+    try:
+        return int(time.mktime(time.strptime(text.strip(), "%Y-%m-%d %H:%M:%S")))
+    except Exception:
+        return 0
+
+
+def cleanup_onchain_focus_symbols() -> None:
+    now = time.time()
+    expired = [sym for sym, info in ONCHAIN_FOCUS_SYMBOLS.items() if float(info.get("expires_at", 0)) <= now]
+    for sym in expired:
+        ONCHAIN_FOCUS_SYMBOLS.pop(sym, None)
+
+
+def register_onchain_focus_symbol(symbol: str, source: dict) -> None:
+    symbol = (symbol or "").strip().upper()
+    if not symbol.endswith("USDT"):
+        return
+    now = time.time()
+    prev = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
+    ONCHAIN_FOCUS_SYMBOLS[symbol] = {
+        "expires_at": max(float(prev.get("expires_at", 0)), now + ONCHAIN_FOCUS_TTL),
+        "token": source.get("token_symbol", symbol.replace("USDT", "")),
+        "exchange": source.get("exchange", "-"),
+        "end_time_utc": source.get("end_time_utc", "-"),
+        "path": source.get("path_addresses") or source.get("path") or "-",
+    }
+    print(f"[ONCHAIN-FOCUS] 등록/연장: {symbol} until={time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ONCHAIN_FOCUS_SYMBOLS[symbol]['expires_at']))}", flush=True)
+
+
+def update_onchain_focus_from_flow_csv(path: str = ONCHAIN_FLOW_CSV) -> None:
+    cleanup_onchain_focus_symbols()
+    if not os.path.exists(path):
+        print(f"[ONCHAIN-FOCUS] flow CSV 없음: {path}", flush=True)
+        return
+    try:
+        spot_map = get_spot_symbols()
+        now = time.time()
+        added = 0
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                token = (row.get("token_symbol") or "").strip().upper()
+                if not token or token in STABLE_EXCLUDED or token.startswith("V"):
+                    continue
+                end_ts = parse_utc_ts(row.get("end_time_utc") or row.get("start_time_utc") or "")
+                if end_ts and now - end_ts > ONCHAIN_FOCUS_MAX_AGE:
+                    continue
+                symbol = token_to_symbol(token, spot_map)
+                if not symbol:
+                    continue
+                register_onchain_focus_symbol(symbol, row)
+                added += 1
+        print(f"[ONCHAIN-FOCUS] flow CSV 반영 완료: {added}건 / 현재 {len(ONCHAIN_FOCUS_SYMBOLS)}개", flush=True)
+    except Exception as e:
+        print(f"[ONCHAIN-FOCUS] CSV 반영 오류: {e}", flush=True)
+        traceback.print_exc()
+
+
+def get_scan_symbols_with_focus(symbols: List[str]) -> List[str]:
+    cleanup_onchain_focus_symbols()
+    merged = list(dict.fromkeys(list(symbols) + list(ONCHAIN_FOCUS_SYMBOLS.keys())))
+    if ONCHAIN_FOCUS_SYMBOLS:
+        print(f"[ONCHAIN-FOCUS] 집중 감시 종목: {sorted(ONCHAIN_FOCUS_SYMBOLS.keys())}", flush=True)
+    return merged
+
 def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = None) -> List[dict]:
     candidates: List[dict] = []
     for symbol in symbols:
         try:
-            candidate = detect_candidate(symbol, ticker_map=ticker_map)
+            is_focus = symbol in ONCHAIN_FOCUS_SYMBOLS
+            candidate = detect_candidate(symbol, ticker_map=ticker_map, relaxed=is_focus)
             if not candidate:
-                print(f"[CANDIDATE] {symbol} | 제외", flush=True)
+                label = "온체인집중 제외" if is_focus else "제외"
+                print(f"[CANDIDATE] {symbol} | {label}", flush=True)
                 continue
+            if is_focus:
+                candidate["onchain_focus"] = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
 
-            key = get_cooldown_key(symbol, prefix="candidate")
+            key = get_cooldown_key(symbol, prefix="onchain_focus" if is_focus else "candidate")
             last_time = last_alert_time.get(key, 0.0)
             if time.time() - last_time < CANDIDATE_ALERT_COOLDOWN:
                 print(f"[CANDIDATE] {symbol} | 쿨다운", flush=True)
                 continue
 
+            focus_tag = "[ONCHAIN-FOCUS] " if symbol in ONCHAIN_FOCUS_SYMBOLS else ""
             print(
-                f"[CANDIDATE] {symbol} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
+                f"[CANDIDATE] {focus_tag}{symbol} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
                 f"12봉범위={candidate['recent12_range']:.2f}% | 6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
                 f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | 지지={candidate['support_touches']}회",
                 flush=True,
@@ -778,9 +875,8 @@ def run_onchain() -> None:
         print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
 
         if eth.returncode == 0:
-            # 차트 후보 알림([TOP50 매집 후보])은 signal_loop에서 독립적으로 전송한다.
-            # 온체인 결합 후보([ONCHAIN+TOP50 후보])는 중복 방지를 위해 비활성화한다.
-            print("[ONCHAIN-CHART] 비활성화: 차트 후보 알림은 signal_loop에서만 전송", flush=True)
+            update_onchain_focus_from_flow_csv(ONCHAIN_FLOW_CSV)
+            print("[ONCHAIN-FOCUS] 온체인 거래소 유입 코인은 signal_loop에서 완화 조건으로 집중 감시", flush=True)
         else:
             print("[ONCHAIN] eth_repeat_wallet_mvp.py 비정상 종료", flush=True)
 
@@ -803,6 +899,7 @@ def signal_loop() -> None:
             print("=" * 60, flush=True)
             print(f"[SIGNAL LOOP START] {time.strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
             symbols = update_symbols_if_needed()
+            symbols = get_scan_symbols_with_focus(symbols)
             ticker_map = refresh_futures_ticker_cache_if_needed(force=True)
             print(f"최종 감시 종목({len(symbols)}개): {symbols}", flush=True)
 
