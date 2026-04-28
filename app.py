@@ -41,6 +41,7 @@ ONCHAIN_FOCUS_MAX_AGE = 12 * 60 * 60  # CSV에서 최근 12시간 이내 flow만
 ONCHAIN_FOCUS_SYMBOLS: Dict[str, dict] = {}
 SYMBOL_REFRESH_INTERVAL = 900
 TOP_SYMBOL_COUNT = 20
+VOLUME_POOL_COUNT = 50  # 거래량 상위 50개 중 변동성 높은 20개를 최종 감시
 FUTURES_TICKER_REFRESH_INTERVAL = 20
 
 SIGNAL_INTERVAL_5M = "5m"
@@ -50,13 +51,18 @@ ENV_INTERVAL_1H = "60m"
 CANDIDATE_MIN_SCORE = 6
 CANDIDATE_MAX_PER_ALERT = 2
 
-# 돌파 전조 필터: 압축 후보 중 '움직이기 시작한' 후보만 알림
-BREAKOUT_CONFIRM_ENABLED = True
-BREAKOUT_MIN_BOX_POSITION = 0.70      # 최근 12봉 박스 안에서 현재가가 상단 70% 이상
-BREAKOUT_MIN_LAST2_MOVE = 0.25        # 직전 2개 5분봉 합산 움직임 최소
-BREAKOUT_MAX_LAST2_MOVE = 1.20        # 너무 이미 튄 추격 후보 제외
-BREAKOUT_MIN_VOLUME_RATIO = 1.05      # 최근 거래량이 이전 구간 대비 최소 1.05배
-BREAKOUT_REQUIRE_HIGHER_LOW = True    # 최근 저점이 올라오는 구조 필요
+# 눌림 진입 필터: 돌파 추격이 아니라, 돌파 후 박스 상단/지지선 재확인 구간만 알림
+PULLBACK_CONFIRM_ENABLED = True
+PULLBACK_LOOKBACK_CANDLES = 12
+PULLBACK_BREAKOUT_BUFFER = 0.0015      # 과거 박스 상단을 0.15% 이상 넘긴 흔적 필요
+PULLBACK_SUPPORT_BAND = 0.006          # 현재 종가가 박스 상단 ±0.6% 안으로 눌렸는지
+PULLBACK_MAX_FROM_BOX_HIGH = 0.012     # 현재가가 박스 상단보다 1.2% 이상 위면 추격이라 제외
+PULLBACK_MIN_REBOUND_CLOSE_POS = 0.55  # 눌림 후 캔들 종가 위치가 중간 이상
+PULLBACK_MAX_UPPER_WICK_RATIO = 0.45   # 윗꼬리가 길면 털기 가능성으로 제외
+PULLBACK_MIN_VOLUME_RATIO = 0.85       # 거래량이 완전히 죽으면 제외
+PULLBACK_MAX_RECENT_6C_SURGE = 3.2     # 최근 6봉 과열 제한
+PULLBACK_MAX_LAST2_MOVE = 0.90         # 직전 2봉 급등 추격 제한
+PULLBACK_REQUIRE_HIGHER_LOW = True
 
 # 하락 추세 필터: ASTER처럼 '하락 중 쉬는 횡보'를 압축 후보로 착각하는 것 방지
 DOWNTREND_FILTER_ENABLED = True
@@ -216,13 +222,50 @@ def get_futures_bases() -> Set[str]:
 
 
 def get_top_symbols(n: int = 20) -> List[str]:
+    """
+    24h 거래량 상위 50개 풀을 먼저 만들고,
+    그 안에서 24h 변동성 높은 순으로 최종 20개를 선별한다.
+    """
     url = "https://api.mexc.com/api/v3/ticker/24hr"
     data = requests.get(url, timeout=10).json()
 
-    usdt_data = [x for x in data if x.get("symbol", "").endswith("USDT")]
-    sorted_symbols = sorted(usdt_data, key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
-    return [x["symbol"] for x in sorted_symbols[:n]]
+    usdt_data = []
+    for x in data:
+        symbol = str(x.get("symbol", "")).upper()
+        if not symbol.endswith("USDT"):
+            continue
+        base = symbol[:-4]
+        if base in EXCLUDED or base in STABLE_EXCLUDED:
+            continue
+        try:
+            quote_volume = float(x.get("quoteVolume", 0) or 0)
+            high = float(x.get("highPrice", 0) or 0)
+            low = float(x.get("lowPrice", 0) or 0)
+            price_change_pct = abs(float(x.get("priceChangePercent", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if quote_volume <= 0 or high <= 0 or low <= 0:
+            continue
+        volatility = (high - low) / low * 100.0
+        usdt_data.append({
+            "symbol": symbol,
+            "quote_volume": quote_volume,
+            "volatility": volatility,
+            "price_change_pct": price_change_pct,
+        })
 
+    volume_pool = sorted(usdt_data, key=lambda x: x["quote_volume"], reverse=True)[:VOLUME_POOL_COUNT]
+    ranked = sorted(
+        volume_pool,
+        key=lambda x: (x["volatility"], x["price_change_pct"], x["quote_volume"]),
+        reverse=True,
+    )
+    selected = [x["symbol"] for x in ranked[:n]]
+    print(
+        f"[SYMBOL SELECT] volume_pool={len(volume_pool)} -> volatility_top={len(selected)} | top={selected}",
+        flush=True,
+    )
+    return selected
 
 def get_final_symbols() -> List[str]:
     spot = get_spot_symbols()
@@ -244,7 +287,7 @@ def update_symbols_if_needed(force: bool = False) -> List[str]:
     if not force and CURRENT_SYMBOLS and (now - LAST_SYMBOL_UPDATE_TIME) < SYMBOL_REFRESH_INTERVAL:
         return CURRENT_SYMBOLS
 
-    print("[SYMBOL UPDATE] Top20 재선정 시작", flush=True)
+    print("[SYMBOL UPDATE] Top50 거래량 풀 → 변동성 Top20 재선정 시작", flush=True)
     new_symbols = get_final_symbols()
 
     added = sorted(set(new_symbols) - set(CURRENT_SYMBOLS))
@@ -594,6 +637,7 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
         "downtrend_reasons": is_clear_downtrend(recent12)[1],
         **is_clear_downtrend(recent12)[2],
         "candidate_candle_ts": recent12[-1]["ts"],
+        "candles_5m": candles_5m,
         "relaxed": relaxed,
         **env_stats,
     }
@@ -615,7 +659,7 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
         return
 
     shown_count = min(len(candidates), CANDIDATE_MAX_PER_ALERT)
-    lines = [f"[TOP20 선별 매집 후보] 상위 {shown_count}개 / 통과 {len(candidates)}개"]
+    lines = [f"[변동성TOP20 눌림 진입 후보] 상위 {shown_count}개 / 통과 {len(candidates)}개"]
     for idx, c in enumerate(candidates[:CANDIDATE_MAX_PER_ALERT], 1):
         reason_text = ", ".join(c["reasons"][:5])
         focus = c.get("onchain_focus") or {}
@@ -628,11 +672,11 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
             f"12봉범위={c['recent12_range']:.2f}% | 박스위치={c.get('box_position', 0):.2f} | "
             f"6봉합={c['recent6_surge']:.2f}% | 직전2봉={c['last2_move']:.2f}% | "
             f"압축={c['compression_ratio']:.2f} | 거래량={c['volume_ratio']:.2f}x | 지지={c['support_touches']}회\n"
-            f"   돌파전조: {', '.join(c.get('breakout_reasons', [])[:4])}\n"
+            f"   눌림확인: {', '.join(c.get('pullback_reasons', [])[:5])}\n"
             f"   이유: {reason_text}{focus_line}"
         )
 
-    lines.append("※ 이 알림은 '압축 후보 + 돌파 전조'가 같이 나온 선별 결과")
+    lines.append("※ 이 알림은 '압축 후보 + 돌파 후 눌림 확인'이 같이 나온 선별 결과")
     lines.append(f"마감 캔들 ts: {candle_ts}")
     send_telegram("\n".join(lines))
 
@@ -816,42 +860,103 @@ def is_clear_downtrend(candles: List[dict]) -> Tuple[bool, List[str], dict]:
     return is_down, reasons, stats
 
 
-def is_breakout_confirmed(candidate: dict) -> Tuple[bool, List[str]]:
+def get_upper_wick_ratio(candle: dict) -> float:
+    candle_range = float(candle.get("range") or 0)
+    if candle_range <= 0:
+        return 0.0
+    return float(candle.get("upper_wick") or 0) / candle_range
+
+
+def is_pullback_confirmed(candidate: dict) -> Tuple[bool, List[str]]:
     """
-    기존 압축 후보 중 실제 알림을 보낼 만한 '돌파 전조'가 있는지 판단.
+    돌파 순간 추격 금지.
+    최근 12봉 박스 상단을 한 번 넘긴 뒤, 다시 박스 상단 근처로 눌리고,
+    그 자리에서 무너지지 않고 반등 캔들/거래량/저점 상승이 확인될 때만 알림.
     """
     reasons: List[str] = []
+    candles = candidate.get("candles_5m") or []
+    if len(candles) < PULLBACK_LOOKBACK_CANDLES + 2:
+        return False, ["5분봉 데이터 부족"]
 
-    box_position = float(candidate.get("box_position") or 0)
-    last2_move = float(candidate.get("last2_move") or 0)
+    recent = candles[-(PULLBACK_LOOKBACK_CANDLES + 1):]
+    box_base = recent[:-3] if len(recent) >= 6 else recent[:-1]
+    last = recent[-1]
+    prev = recent[-2]
+
+    if len(box_base) < 6:
+        return False, ["박스 기준봉 부족"]
+
+    box_high = max(c["high"] for c in box_base)
+    box_low = min(c["low"] for c in box_base)
+    last_close = float(last["close"])
+    last_low = float(last["low"])
+    prev_close = float(prev["close"])
+
+    if box_high <= 0 or box_low <= 0 or last_close <= 0:
+        return False, ["가격 데이터 오류"]
+
+    breakout_seen = max(c["high"] for c in recent[-4:-1]) > box_high * (1 + PULLBACK_BREAKOUT_BUFFER)
+    pullback_to_support = last_low <= box_high * (1 + PULLBACK_SUPPORT_BAND) and last_close >= box_high * (1 - PULLBACK_SUPPORT_BAND)
+    not_chasing = last_close <= box_high * (1 + PULLBACK_MAX_FROM_BOX_HIGH)
+    reclaimed = last_close > box_high or (last_close > prev_close and last_close > last["open"])
+    rebound_close_pos = float(last.get("close_pos") or 0)
+    upper_wick_ratio = get_upper_wick_ratio(last)
+
     volume_ratio = float(candidate.get("volume_ratio") or 0)
+    recent6_surge = float(candidate.get("recent6_surge") or 0)
+    last2_move = float(candidate.get("last2_move") or 0)
     trend = candidate.get("trend_direction") or "NONE"
     higher_low = bool(candidate.get("higher_low_structure"))
 
     ok = True
 
-    if box_position < BREAKOUT_MIN_BOX_POSITION:
-        ok = False
-        reasons.append(f"박스상단 접근 부족({box_position:.2f} < {BREAKOUT_MIN_BOX_POSITION:.2f})")
+    if breakout_seen:
+        reasons.append("돌파 흔적 있음")
     else:
-        reasons.append(f"박스상단 접근({box_position:.2f})")
-
-    if not (BREAKOUT_MIN_LAST2_MOVE <= last2_move <= BREAKOUT_MAX_LAST2_MOVE):
         ok = False
-        reasons.append(f"직전2봉 움직임 부적절({last2_move:.2f}%, 기준 {BREAKOUT_MIN_LAST2_MOVE:.2f}~{BREAKOUT_MAX_LAST2_MOVE:.2f}%)")
-    else:
-        reasons.append(f"직전2봉 움직임({last2_move:.2f}%)")
+        reasons.append("돌파 흔적 없음")
 
-    if volume_ratio < BREAKOUT_MIN_VOLUME_RATIO:
+    if pullback_to_support:
+        distance = (last_close - box_high) / box_high * 100.0
+        reasons.append(f"박스상단 눌림({distance:.2f}%)")
+    else:
         ok = False
-        reasons.append(f"거래량 전조 부족({volume_ratio:.2f}x < {BREAKOUT_MIN_VOLUME_RATIO:.2f}x)")
-    else:
-        reasons.append(f"거래량 전조({volume_ratio:.2f}x)")
+        reasons.append("박스상단 눌림 아님")
 
-    if BREAKOUT_REQUIRE_HIGHER_LOW and not higher_low:
+    if not_chasing:
+        reasons.append("추격 아님")
+    else:
+        ok = False
+        reasons.append("박스상단 대비 과열")
+
+    if reclaimed and rebound_close_pos >= PULLBACK_MIN_REBOUND_CLOSE_POS:
+        reasons.append(f"재상승 확인(close_pos={rebound_close_pos:.2f})")
+    else:
+        ok = False
+        reasons.append(f"재상승 약함(close_pos={rebound_close_pos:.2f})")
+
+    if upper_wick_ratio <= PULLBACK_MAX_UPPER_WICK_RATIO:
+        reasons.append(f"윗꼬리 양호({upper_wick_ratio:.2f})")
+    else:
+        ok = False
+        reasons.append(f"윗꼬리 과다({upper_wick_ratio:.2f})")
+
+    if volume_ratio >= PULLBACK_MIN_VOLUME_RATIO:
+        reasons.append(f"거래량 유지({volume_ratio:.2f}x)")
+    else:
+        ok = False
+        reasons.append(f"거래량 부족({volume_ratio:.2f}x)")
+
+    if recent6_surge <= PULLBACK_MAX_RECENT_6C_SURGE and last2_move <= PULLBACK_MAX_LAST2_MOVE:
+        reasons.append(f"과열 제한(6봉={recent6_surge:.2f}%, 2봉={last2_move:.2f}%)")
+    else:
+        ok = False
+        reasons.append(f"과열/추격 위험(6봉={recent6_surge:.2f}%, 2봉={last2_move:.2f}%)")
+
+    if PULLBACK_REQUIRE_HIGHER_LOW and not higher_low:
         ok = False
         reasons.append("저점 상승 구조 없음")
-    elif BREAKOUT_REQUIRE_HIGHER_LOW:
+    elif PULLBACK_REQUIRE_HIGHER_LOW:
         reasons.append("저점 상승 구조")
 
     if trend == "SHORT":
@@ -865,8 +970,10 @@ def is_breakout_confirmed(candidate: dict) -> Tuple[bool, List[str]]:
         down_reasons = candidate.get("downtrend_reasons") or []
         reasons.append("하락추세 제외" + (f"({', '.join(down_reasons[:3])})" if down_reasons else ""))
 
+    candidate["pullback_box_high"] = box_high
+    candidate["pullback_box_low"] = box_low
+    candidate["pullback_upper_wick_ratio"] = upper_wick_ratio
     return ok, reasons
-
 
 def calculate_selection_score(candidate: dict) -> float:
     """
@@ -986,16 +1093,16 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
                 candidate["onchain_focus"] = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
 
             candidate["select_score"] = calculate_selection_score(candidate)
-            breakout_ok, breakout_reasons = is_breakout_confirmed(candidate)
-            candidate["breakout_ok"] = breakout_ok
-            candidate["breakout_reasons"] = breakout_reasons
+            pullback_ok, pullback_reasons = is_pullback_confirmed(candidate)
+            candidate["pullback_ok"] = pullback_ok
+            candidate["pullback_reasons"] = pullback_reasons
 
-            if BREAKOUT_CONFIRM_ENABLED and not breakout_ok:
+            if PULLBACK_CONFIRM_ENABLED and not pullback_ok:
                 print(
-                    f"[BREAKOUT WAIT] {symbol} | select={candidate['select_score']} | score={candidate['score']} | "
+                    f"[PULLBACK WAIT] {symbol} | select={candidate['select_score']} | score={candidate['score']} | "
                     f"box={candidate.get('box_position', 0):.2f} | 2봉={candidate['last2_move']:.2f}% | "
                     f"거래량={candidate['volume_ratio']:.2f}x | higher_low={candidate.get('higher_low_structure')} | "
-                    f"downtrend={candidate.get('clear_downtrend')} | 이유: {', '.join(breakout_reasons[:4])}",
+                    f"downtrend={candidate.get('clear_downtrend')} | 이유: {', '.join(pullback_reasons[:5])}",
                     flush=True,
                 )
                 continue
@@ -1012,7 +1119,7 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
                 f"12봉범위={candidate['recent12_range']:.2f}% | box={candidate.get('box_position', 0):.2f} | "
                 f"6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
                 f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | "
-                f"지지={candidate['support_touches']}회 | 돌파전조=Y | 하락추세=N",
+                f"지지={candidate['support_touches']}회 | 눌림확인=Y | 하락추세=N",
                 flush=True,
             )
             candidates.append(candidate)
@@ -1113,6 +1220,11 @@ def analyze_onchain_chart_candidates() -> None:
             candidate = detect_candidate(symbol, ticker_map=ticker_map)
             if not candidate:
                 continue
+            pullback_ok, pullback_reasons = is_pullback_confirmed(candidate)
+            if PULLBACK_CONFIRM_ENABLED and not pullback_ok:
+                print(f"[ONCHAIN-CHART] {symbol} 눌림 대기: {', '.join(pullback_reasons[:5])}", flush=True)
+                continue
+            candidate["pullback_reasons"] = pullback_reasons
 
             key = get_cooldown_key(symbol, prefix="onchain_candidate")
             now = time.time()
@@ -1141,7 +1253,7 @@ def analyze_onchain_chart_candidates() -> None:
                 trigger = "강한 허브 + 후보"
 
             send_telegram(
-                f"[ONCHAIN+TOP20 후보] {symbol}\n"
+                f"[ONCHAIN+눌림 후보] {symbol}\n"
                 f"트리거: {trigger}\n"
                 f"token: {token_symbol} ({token_name})\n"
                 f"seed: {seed}\n"
@@ -1156,6 +1268,7 @@ def analyze_onchain_chart_candidates() -> None:
                 f"직전 2봉 변화: {candidate['last2_move']:.2f}% / 변동성 압축: {candidate['compression_ratio']:.2f}\n"
                 f"거래량 생존: {candidate['volume_ratio']:.2f}x / 지지 재확인: {candidate['support_touches']}회\n"
                 f"이유: {', '.join(candidate['reasons'][:5])}\n"
+                f"눌림확인: {', '.join(candidate.get('pullback_reasons', [])[:5])}\n"
                 f"{format_basis_lines(candidate)}"
             )
 
