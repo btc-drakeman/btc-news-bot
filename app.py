@@ -49,6 +49,15 @@ ENV_INTERVAL_1H = "60m"
 
 CANDIDATE_MIN_SCORE = 6
 CANDIDATE_MAX_PER_ALERT = 2
+
+# 돌파 전조 필터: 압축 후보 중 '움직이기 시작한' 후보만 알림
+BREAKOUT_CONFIRM_ENABLED = True
+BREAKOUT_MIN_BOX_POSITION = 0.70      # 최근 12봉 박스 안에서 현재가가 상단 70% 이상
+BREAKOUT_MIN_LAST2_MOVE = 0.25        # 직전 2개 5분봉 합산 움직임 최소
+BREAKOUT_MAX_LAST2_MOVE = 1.20        # 너무 이미 튄 추격 후보 제외
+BREAKOUT_MIN_VOLUME_RATIO = 1.05      # 최근 거래량이 이전 구간 대비 최소 1.05배
+BREAKOUT_REQUIRE_HIGHER_LOW = True    # 최근 저점이 올라오는 구조 필요
+
 MAX_RECENT_6C_SURGE = 4.5
 MAX_LAST2_MOVE = 1.2
 MAX_BASIS_ABS = 0.35
@@ -570,6 +579,9 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
         "basis_pct": basis_pct,
         "last_close": recent12[-1]["close"],
         "support_low": support_low,
+        "recent12_high": max(c["high"] for c in recent12),
+        "box_position": ((recent12[-1]["close"] - support_low) / max((max(c["high"] for c in recent12) - support_low), 1e-12)),
+        "higher_low_structure": has_higher_low_structure(recent4),
         "candidate_candle_ts": recent12[-1]["ts"],
         "relaxed": relaxed,
         **env_stats,
@@ -602,12 +614,14 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
             focus_line = f"\n   온체인: {focus.get('token', '-')} → {focus.get('exchange', '-')} / {focus.get('end_time_utc', '-')}"
         lines.append(
             f"{idx}. {prefix}{c['symbol']} | select={c.get('select_score', '-')} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
-            f"12봉범위={c['recent12_range']:.2f}% | 6봉합={c['recent6_surge']:.2f}% | 직전2봉={c['last2_move']:.2f}% | "
+            f"12봉범위={c['recent12_range']:.2f}% | 박스위치={c.get('box_position', 0):.2f} | "
+            f"6봉합={c['recent6_surge']:.2f}% | 직전2봉={c['last2_move']:.2f}% | "
             f"압축={c['compression_ratio']:.2f} | 거래량={c['volume_ratio']:.2f}x | 지지={c['support_touches']}회\n"
+            f"   돌파전조: {', '.join(c.get('breakout_reasons', [])[:4])}\n"
             f"   이유: {reason_text}{focus_line}"
         )
 
-    lines.append("※ 이 알림은 진입 신호가 아니라 '아직 안 터진 후보' 스캔 결과")
+    lines.append("※ 이 알림은 '압축 후보 + 돌파 전조'가 같이 나온 선별 결과")
     lines.append(f"마감 캔들 ts: {candle_ts}")
     send_telegram("\n".join(lines))
 
@@ -693,6 +707,86 @@ def get_scan_symbols_with_focus(symbols: List[str]) -> List[str]:
 
     return merged
 
+
+
+
+
+def get_box_position(candidate: dict) -> float:
+    """
+    최근 12봉 박스 안에서 현재가가 어느 위치인지 계산.
+    0에 가까우면 박스 하단, 1에 가까우면 박스 상단.
+    """
+    last_close = float(candidate.get("last_close") or 0)
+    support_low = float(candidate.get("support_low") or 0)
+    recent12_range = float(candidate.get("recent12_range") or 0)
+    if last_close <= 0 or support_low <= 0 or recent12_range <= 0:
+        return 0.0
+
+    # recent12_range = (high - low) / low * 100 이므로 high를 역산
+    estimated_high = support_low * (1 + recent12_range / 100.0)
+    box_height = estimated_high - support_low
+    if box_height <= 0:
+        return 0.0
+    return max(0.0, min(1.0, (last_close - support_low) / box_height))
+
+
+def has_higher_low_structure(candles: List[dict]) -> bool:
+    """
+    최근 저점이 미세하게 올라오는지 확인.
+    너무 엄격하게 연속 상승을 요구하지 않고,
+    최근 저점이 3~4봉 전 저점보다 위에 있으면 통과.
+    """
+    if len(candles) < 4:
+        return False
+    lows = [c["low"] for c in candles[-4:]]
+    return lows[-1] > min(lows[:2]) and lows[-2] >= min(lows[:2]) * 0.998
+
+
+def is_breakout_confirmed(candidate: dict) -> Tuple[bool, List[str]]:
+    """
+    기존 압축 후보 중 실제 알림을 보낼 만한 '돌파 전조'가 있는지 판단.
+    """
+    reasons: List[str] = []
+
+    box_position = float(candidate.get("box_position") or 0)
+    last2_move = float(candidate.get("last2_move") or 0)
+    volume_ratio = float(candidate.get("volume_ratio") or 0)
+    trend = candidate.get("trend_direction") or "NONE"
+    higher_low = bool(candidate.get("higher_low_structure"))
+
+    ok = True
+
+    if box_position < BREAKOUT_MIN_BOX_POSITION:
+        ok = False
+        reasons.append(f"박스상단 접근 부족({box_position:.2f} < {BREAKOUT_MIN_BOX_POSITION:.2f})")
+    else:
+        reasons.append(f"박스상단 접근({box_position:.2f})")
+
+    if not (BREAKOUT_MIN_LAST2_MOVE <= last2_move <= BREAKOUT_MAX_LAST2_MOVE):
+        ok = False
+        reasons.append(f"직전2봉 움직임 부적절({last2_move:.2f}%, 기준 {BREAKOUT_MIN_LAST2_MOVE:.2f}~{BREAKOUT_MAX_LAST2_MOVE:.2f}%)")
+    else:
+        reasons.append(f"직전2봉 움직임({last2_move:.2f}%)")
+
+    if volume_ratio < BREAKOUT_MIN_VOLUME_RATIO:
+        ok = False
+        reasons.append(f"거래량 전조 부족({volume_ratio:.2f}x < {BREAKOUT_MIN_VOLUME_RATIO:.2f}x)")
+    else:
+        reasons.append(f"거래량 전조({volume_ratio:.2f}x)")
+
+    if BREAKOUT_REQUIRE_HIGHER_LOW and not higher_low:
+        ok = False
+        reasons.append("저점 상승 구조 없음")
+    elif BREAKOUT_REQUIRE_HIGHER_LOW:
+        reasons.append("저점 상승 구조")
+
+    if trend == "SHORT":
+        ok = False
+        reasons.append("15분 SHORT 제외")
+    else:
+        reasons.append(f"15분 {trend}")
+
+    return ok, reasons
 
 
 def calculate_selection_score(candidate: dict) -> float:
@@ -809,6 +903,19 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
                 candidate["onchain_focus"] = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
 
             candidate["select_score"] = calculate_selection_score(candidate)
+            breakout_ok, breakout_reasons = is_breakout_confirmed(candidate)
+            candidate["breakout_ok"] = breakout_ok
+            candidate["breakout_reasons"] = breakout_reasons
+
+            if BREAKOUT_CONFIRM_ENABLED and not breakout_ok:
+                print(
+                    f"[BREAKOUT WAIT] {symbol} | select={candidate['select_score']} | score={candidate['score']} | "
+                    f"box={candidate.get('box_position', 0):.2f} | 2봉={candidate['last2_move']:.2f}% | "
+                    f"거래량={candidate['volume_ratio']:.2f}x | higher_low={candidate.get('higher_low_structure')} | "
+                    f"이유: {', '.join(breakout_reasons[:3])}",
+                    flush=True,
+                )
+                continue
 
             key = get_cooldown_key(symbol, prefix="onchain_focus" if is_focus else "candidate")
             last_time = last_alert_time.get(key, 0.0)
@@ -819,8 +926,10 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
             focus_tag = "[ONCHAIN-FOCUS] " if symbol in ONCHAIN_FOCUS_SYMBOLS else ""
             print(
                 f"[CANDIDATE] {focus_tag}{symbol} | select={candidate['select_score']} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
-                f"12봉범위={candidate['recent12_range']:.2f}% | 6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
-                f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | 지지={candidate['support_touches']}회",
+                f"12봉범위={candidate['recent12_range']:.2f}% | box={candidate.get('box_position', 0):.2f} | "
+                f"6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
+                f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | "
+                f"지지={candidate['support_touches']}회 | 돌파전조=Y",
                 flush=True,
             )
             candidates.append(candidate)
