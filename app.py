@@ -48,7 +48,7 @@ TREND_INTERVAL_15M = "15m"
 ENV_INTERVAL_1H = "60m"
 
 CANDIDATE_MIN_SCORE = 6
-CANDIDATE_MAX_PER_ALERT = 5
+CANDIDATE_MAX_PER_ALERT = 2
 MAX_RECENT_6C_SURGE = 4.5
 MAX_LAST2_MOVE = 1.2
 MAX_BASIS_ABS = 0.35
@@ -591,7 +591,8 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
     if not candidates:
         return
 
-    lines = [f"[TOP50 매집 후보] {len(candidates)}개"]
+    shown_count = min(len(candidates), CANDIDATE_MAX_PER_ALERT)
+    lines = [f"[TOP50 선별 매집 후보] 상위 {shown_count}개 / 통과 {len(candidates)}개"]
     for idx, c in enumerate(candidates[:CANDIDATE_MAX_PER_ALERT], 1):
         reason_text = ", ".join(c["reasons"][:5])
         focus = c.get("onchain_focus") or {}
@@ -600,7 +601,7 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
         if focus:
             focus_line = f"\n   온체인: {focus.get('token', '-')} → {focus.get('exchange', '-')} / {focus.get('end_time_utc', '-')}"
         lines.append(
-            f"{idx}. {prefix}{c['symbol']} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
+            f"{idx}. {prefix}{c['symbol']} | select={c.get('select_score', '-')} | score={c['score']} | 1h={c['env_direction_1h']} | 15분={c['trend_direction']} | "
             f"12봉범위={c['recent12_range']:.2f}% | 6봉합={c['recent6_surge']:.2f}% | 직전2봉={c['last2_move']:.2f}% | "
             f"압축={c['compression_ratio']:.2f} | 거래량={c['volume_ratio']:.2f}x | 지지={c['support_touches']}회\n"
             f"   이유: {reason_text}{focus_line}"
@@ -692,6 +693,108 @@ def get_scan_symbols_with_focus(symbols: List[str]) -> List[str]:
 
     return merged
 
+
+
+def calculate_selection_score(candidate: dict) -> float:
+    """
+    후보 통과 후, 실제 알림 우선순위를 다시 매기는 선별 점수.
+    목적:
+    - 단순 score 높은 후보가 아니라
+    - 거래량이 살아나고, 압축이 좋고, 직전 2봉이 살짝 움직이며,
+      15분 방향이 나쁘지 않은 후보를 우선 알림.
+    """
+    s = float(candidate.get("score") or 0)
+
+    volume_ratio = float(candidate.get("volume_ratio") or 0)
+    compression_ratio = float(candidate.get("compression_ratio") or 99)
+    last2_move = float(candidate.get("last2_move") or 0)
+    recent12_range = float(candidate.get("recent12_range") or 0)
+    recent6_surge = float(candidate.get("recent6_surge") or 0)
+    support_touches = int(candidate.get("support_touches") or 0)
+    trend = candidate.get("trend_direction") or "NONE"
+    env = candidate.get("env_direction_1h") or "NONE"
+    basis_pct = candidate.get("basis_pct")
+
+    # 거래량: 너무 죽은 것보다 0.9~1.5x를 우선. 1.8x 이상은 추격 위험으로 감점.
+    if 0.90 <= volume_ratio <= 1.50:
+        s += 2.0
+    elif 0.75 <= volume_ratio < 0.90:
+        s += 0.8
+    elif 1.50 < volume_ratio <= 1.80:
+        s += 0.5
+    elif volume_ratio > 1.80:
+        s -= 1.5
+
+    # 압축: 낮을수록 우선. 단, 너무 죽은 차트만 고르지 않도록 다른 조건과 같이 봄.
+    if compression_ratio <= 0.75:
+        s += 2.0
+    elif compression_ratio <= 1.00:
+        s += 1.2
+    elif compression_ratio <= 1.25:
+        s += 0.3
+    elif compression_ratio > 1.50:
+        s -= 1.0
+
+    # 직전 2봉: 완전 무반응보다 살짝 살아난 후보 우선. 너무 크면 추격 위험.
+    if 0.15 <= last2_move <= 0.80:
+        s += 1.6
+    elif 0.05 <= last2_move < 0.15:
+        s += 0.5
+    elif last2_move > 1.00:
+        s -= 1.2
+
+    # 최근 12봉 범위: 너무 좁아도 무반응, 너무 넓어도 이미 흔들림.
+    if 0.50 <= recent12_range <= 2.20:
+        s += 1.0
+    elif recent12_range < 0.25:
+        s -= 0.6
+    elif recent12_range > 2.80:
+        s -= 0.8
+
+    # 최근 6봉 과열도: 낮되 완전 죽은 것보다는 적당한 움직임 선호.
+    if 0.50 <= recent6_surge <= 2.50:
+        s += 0.8
+    elif recent6_surge < 0.25:
+        s -= 0.4
+    elif recent6_surge > 3.50:
+        s -= 0.8
+
+    # 지지 터치: 많을수록 좋지만 12회처럼 전부 붙어 있으면 너무 죽은 박스일 수도 있어 과가산 방지.
+    if 4 <= support_touches <= 8:
+        s += 1.0
+    elif support_touches > 8:
+        s += 0.4
+
+    # 방향성: 롱 후보 기준. 15분 SHORT는 강하게 감점.
+    if trend == "LONG":
+        s += 1.5
+    elif trend == "SHORT":
+        s -= 2.0
+
+    # 1시간 환경: LONG 우선, SHORT는 감점, NONE은 중립.
+    if env == "LONG":
+        s += 1.0
+    elif env == "SHORT":
+        s -= 1.0
+
+    # 괴리율: 공정가와 너무 벌어진 후보는 우선순위 낮춤.
+    if basis_pct is not None:
+        try:
+            basis_abs = abs(float(basis_pct))
+            if basis_abs <= 0.15:
+                s += 0.6
+            elif basis_abs > 0.30:
+                s -= 0.6
+        except Exception:
+            pass
+
+    # 온체인 집중 종목은 같은 차트 조건이면 우선순위 소폭 가산.
+    if candidate.get("onchain_focus"):
+        s += 1.5
+
+    return round(s, 2)
+
+
 def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = None) -> List[dict]:
     candidates: List[dict] = []
     for symbol in symbols:
@@ -705,6 +808,8 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
             if is_focus:
                 candidate["onchain_focus"] = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
 
+            candidate["select_score"] = calculate_selection_score(candidate)
+
             key = get_cooldown_key(symbol, prefix="onchain_focus" if is_focus else "candidate")
             last_time = last_alert_time.get(key, 0.0)
             if time.time() - last_time < CANDIDATE_ALERT_COOLDOWN:
@@ -713,7 +818,7 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
 
             focus_tag = "[ONCHAIN-FOCUS] " if symbol in ONCHAIN_FOCUS_SYMBOLS else ""
             print(
-                f"[CANDIDATE] {focus_tag}{symbol} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
+                f"[CANDIDATE] {focus_tag}{symbol} | select={candidate['select_score']} | score={candidate['score']} | 1h={candidate['env_direction_1h']} | trend={candidate['trend_direction']} | "
                 f"12봉범위={candidate['recent12_range']:.2f}% | 6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
                 f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | 지지={candidate['support_touches']}회",
                 flush=True,
@@ -725,10 +830,11 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
 
     candidates.sort(
         key=lambda x: (
+            x.get("select_score", 0),
             x["score"],
             -x["recent12_range"],
             -x["support_touches"],
-            x["compression_ratio"],
+            -x["compression_ratio"],
             -(abs(x["basis_pct"]) if x["basis_pct"] is not None else 0.0),
         ),
         reverse=True,
