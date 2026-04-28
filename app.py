@@ -58,6 +58,14 @@ BREAKOUT_MAX_LAST2_MOVE = 1.20        # 너무 이미 튄 추격 후보 제외
 BREAKOUT_MIN_VOLUME_RATIO = 1.05      # 최근 거래량이 이전 구간 대비 최소 1.05배
 BREAKOUT_REQUIRE_HIGHER_LOW = True    # 최근 저점이 올라오는 구조 필요
 
+# 하락 추세 필터: ASTER처럼 '하락 중 쉬는 횡보'를 압축 후보로 착각하는 것 방지
+DOWNTREND_FILTER_ENABLED = True
+DOWNTREND_LOOKBACK_CANDLES = 12
+DOWNTREND_HIGH_DROP_MIN = 0.35      # 최근 고점이 과거 고점보다 이 정도 이상 낮아지면 하락 압력으로 봄
+DOWNTREND_LOW_DROP_MIN = 0.20       # 최근 저점도 낮아지면 하락 추세 확정성 증가
+DOWNTREND_MA_STACK_CHECK = True     # 단기 이평이 중장기 이평 아래면 추가 감점/제외
+
+
 MAX_RECENT_6C_SURGE = 4.5
 MAX_LAST2_MOVE = 1.2
 MAX_BASIS_ABS = 0.35
@@ -582,6 +590,9 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
         "recent12_high": max(c["high"] for c in recent12),
         "box_position": ((recent12[-1]["close"] - support_low) / max((max(c["high"] for c in recent12) - support_low), 1e-12)),
         "higher_low_structure": has_higher_low_structure(recent4),
+        "clear_downtrend": is_clear_downtrend(recent12)[0],
+        "downtrend_reasons": is_clear_downtrend(recent12)[1],
+        **is_clear_downtrend(recent12)[2],
         "candidate_candle_ts": recent12[-1]["ts"],
         "relaxed": relaxed,
         **env_stats,
@@ -742,6 +753,69 @@ def has_higher_low_structure(candles: List[dict]) -> bool:
     return lows[-1] > min(lows[:2]) and lows[-2] >= min(lows[:2]) * 0.998
 
 
+
+
+def is_clear_downtrend(candles: List[dict]) -> Tuple[bool, List[str], dict]:
+    """
+    최근 구간이 '압축'이 아니라 '하락 추세 속 잠깐 횡보'인지 판별.
+    ASTER 같은 구조:
+    - 앞 구간 고점보다 최근 고점이 낮음
+    - 앞 구간 저점보다 최근 저점도 낮음
+    - 최근 종가가 단기 평균 아래쪽에 머무름
+    """
+    reasons: List[str] = []
+    stats = {
+        "downtrend_high_drop": 0.0,
+        "downtrend_low_drop": 0.0,
+        "downtrend_close_vs_mid": 0.0,
+    }
+
+    if len(candles) < max(8, DOWNTREND_LOOKBACK_CANDLES):
+        return False, reasons, stats
+
+    recent = candles[-DOWNTREND_LOOKBACK_CANDLES:]
+    first_half = recent[:len(recent)//2]
+    second_half = recent[len(recent)//2:]
+
+    prev_high = max(c["high"] for c in first_half)
+    recent_high = max(c["high"] for c in second_half)
+    prev_low = min(c["low"] for c in first_half)
+    recent_low = min(c["low"] for c in second_half)
+    last_close = recent[-1]["close"]
+
+    high_drop = (prev_high - recent_high) / prev_high * 100.0 if prev_high > 0 else 0.0
+    low_drop = (prev_low - recent_low) / prev_low * 100.0 if prev_low > 0 else 0.0
+    mid_price = (prev_high + prev_low) / 2.0 if prev_high > 0 and prev_low > 0 else last_close
+    close_vs_mid = (last_close - mid_price) / mid_price * 100.0 if mid_price > 0 else 0.0
+
+    stats.update({
+        "downtrend_high_drop": high_drop,
+        "downtrend_low_drop": low_drop,
+        "downtrend_close_vs_mid": close_vs_mid,
+    })
+
+    lower_high = high_drop >= DOWNTREND_HIGH_DROP_MIN
+    lower_low = low_drop >= DOWNTREND_LOW_DROP_MIN
+    weak_close = close_vs_mid < -0.10
+
+    # 최근 4봉의 고점도 계속 약한지 확인
+    last4 = recent[-4:]
+    last4_high_weak = max(c["high"] for c in last4) < prev_high * (1 - DOWNTREND_HIGH_DROP_MIN / 200.0)
+
+    is_down = lower_high and (lower_low or weak_close) and last4_high_weak
+
+    if lower_high:
+        reasons.append(f"고점 하락({high_drop:.2f}%)")
+    if lower_low:
+        reasons.append(f"저점 하락({low_drop:.2f}%)")
+    if weak_close:
+        reasons.append(f"종가 약세({close_vs_mid:.2f}%)")
+    if last4_high_weak:
+        reasons.append("최근4봉 고점 회복 실패")
+
+    return is_down, reasons, stats
+
+
 def is_breakout_confirmed(candidate: dict) -> Tuple[bool, List[str]]:
     """
     기존 압축 후보 중 실제 알림을 보낼 만한 '돌파 전조'가 있는지 판단.
@@ -785,6 +859,11 @@ def is_breakout_confirmed(candidate: dict) -> Tuple[bool, List[str]]:
         reasons.append("15분 SHORT 제외")
     else:
         reasons.append(f"15분 {trend}")
+
+    if DOWNTREND_FILTER_ENABLED and candidate.get("clear_downtrend"):
+        ok = False
+        down_reasons = candidate.get("downtrend_reasons") or []
+        reasons.append("하락추세 제외" + (f"({', '.join(down_reasons[:3])})" if down_reasons else ""))
 
     return ok, reasons
 
@@ -882,6 +961,10 @@ def calculate_selection_score(candidate: dict) -> float:
         except Exception:
             pass
 
+    # 하락 추세 속 횡보는 강하게 감점.
+    if candidate.get("clear_downtrend"):
+        s -= 4.0
+
     # 온체인 집중 종목은 같은 차트 조건이면 우선순위 소폭 가산.
     if candidate.get("onchain_focus"):
         s += 1.5
@@ -912,7 +995,7 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
                     f"[BREAKOUT WAIT] {symbol} | select={candidate['select_score']} | score={candidate['score']} | "
                     f"box={candidate.get('box_position', 0):.2f} | 2봉={candidate['last2_move']:.2f}% | "
                     f"거래량={candidate['volume_ratio']:.2f}x | higher_low={candidate.get('higher_low_structure')} | "
-                    f"이유: {', '.join(breakout_reasons[:3])}",
+                    f"downtrend={candidate.get('clear_downtrend')} | 이유: {', '.join(breakout_reasons[:4])}",
                     flush=True,
                 )
                 continue
@@ -929,7 +1012,7 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
                 f"12봉범위={candidate['recent12_range']:.2f}% | box={candidate.get('box_position', 0):.2f} | "
                 f"6봉합={candidate['recent6_surge']:.2f}% | 2봉합={candidate['last2_move']:.2f}% | "
                 f"압축={candidate['compression_ratio']:.2f} | 거래량={candidate['volume_ratio']:.2f}x | "
-                f"지지={candidate['support_touches']}회 | 돌파전조=Y",
+                f"지지={candidate['support_touches']}회 | 돌파전조=Y | 하락추세=N",
                 flush=True,
             )
             candidates.append(candidate)
