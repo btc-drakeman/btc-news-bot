@@ -68,6 +68,11 @@ ENV_1H_RANGE_MAX = 9.0
 ENV_1H_LAST3_MOVE_MAX = 6.0
 ENV_1H_COMPRESSION_MAX = 1.25
 
+# 후보 탈락 진단 로그
+CANDIDATE_FAIL_DEBUG = os.getenv("CANDIDATE_FAIL_DEBUG", "1") != "0"
+CANDIDATE_FAIL_VERBOSE = os.getenv("CANDIDATE_FAIL_VERBOSE", "0") != "0"
+CANDIDATE_FAIL_REASON_LIMIT = int(os.getenv("CANDIDATE_FAIL_REASON_LIMIT", "3"))
+
 # 온체인 실전형 필터
 ONCHAIN_MIN_SHARED = 3
 ONCHAIN_MIN_SCORE = 18
@@ -420,20 +425,52 @@ def is_1h_environment_ok(candles_1h: List[dict]) -> Tuple[bool, str, dict]:
     }
 
 
+
+def log_candidate_fail(symbol: str, mode: str, fail_reasons: List[str], stats: Optional[dict] = None) -> None:
+    if not CANDIDATE_FAIL_DEBUG:
+        return
+    stats = stats or {}
+    if not fail_reasons:
+        fail_reasons = ["unknown"]
+    shown = fail_reasons[:max(1, CANDIDATE_FAIL_REASON_LIMIT)]
+    more = f" 외 {len(fail_reasons) - len(shown)}개" if len(fail_reasons) > len(shown) else ""
+    base = f"[CANDIDATE FAIL] {symbol} | mode={mode} | reason={'; '.join(shown)}{more}"
+    if CANDIDATE_FAIL_VERBOSE:
+        base += (
+            f" | score={stats.get('score', '-')}"
+            f" | 12범위={stats.get('recent12_range', 0):.2f}%"
+            f" | 12이동={stats.get('recent12_move', 0):.2f}%"
+            f" | 6봉합={stats.get('recent6_surge', 0):.2f}%"
+            f" | 2봉합={stats.get('last2_move', 0):.2f}%"
+            f" | 단일최대={stats.get('max_single_range', 0):.2f}%"
+            f" | 압축={stats.get('compression_ratio', 0):.2f}"
+            f" | 거래량={stats.get('volume_ratio', 0):.2f}x"
+            f" | 지지={stats.get('support_touches', 0)}회"
+            f" | 지지이격={stats.get('price_above_support', 0):.2f}%"
+            f" | 괴리={stats.get('basis_pct') if stats.get('basis_pct') is not None else '-'}"
+            f" | env_ok={stats.get('env_ok', '-')}"
+        )
+    print(base, flush=True)
+
 def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, relaxed: bool = False) -> Optional[dict]:
+    mode = "ONCHAIN" if relaxed else "NORMAL"
     data_5m = get_kline(symbol, interval=SIGNAL_INTERVAL_5M, limit=50)
     data_15m = get_kline(symbol, interval=TREND_INTERVAL_15M, limit=20)
     data_1h = get_kline(symbol, interval=ENV_INTERVAL_1H, limit=10)
     if not isinstance(data_5m, list) or len(data_5m) < 26:
+        log_candidate_fail(symbol, mode, [f"5m 데이터 부족({len(data_5m) if isinstance(data_5m, list) else 'bad'})"])
         return None
     if not isinstance(data_15m, list) or len(data_15m) < 6:
+        log_candidate_fail(symbol, mode, [f"15m 데이터 부족({len(data_15m) if isinstance(data_15m, list) else 'bad'})"])
         return None
     if not isinstance(data_1h, list) or len(data_1h) < 6:
+        log_candidate_fail(symbol, mode, [f"1h 데이터 부족({len(data_1h) if isinstance(data_1h, list) else 'bad'})"])
         return None
 
     candles_5m = [c for c in (build_candle(x) for x in data_5m[:-1]) if c]
     candles_1h = [c for c in (build_candle(x) for x in data_1h[:-1]) if c]
     if len(candles_5m) < 18 or len(candles_1h) < 5:
+        log_candidate_fail(symbol, mode, [f"캔들 파싱 부족(5m={len(candles_5m)},1h={len(candles_1h)})"])
         return None
 
     recent12 = candles_5m[-12:]
@@ -521,29 +558,54 @@ def detect_candidate(symbol: str, ticker_map: Optional[Dict[str, dict]] = None, 
     max_above_support = 5.0 if relaxed else 2.8
     min_score = 4 if relaxed else CANDIDATE_MIN_SCORE
 
+    fail_reasons: List[str] = []
     if recent12_range < min_range:
-        return None
+        fail_reasons.append(f"12봉범위 너무 좁음 {recent12_range:.2f}% < {min_range:.2f}%")
     if recent12_range > max_range:
-        return None
+        fail_reasons.append(f"12봉범위 초과 {recent12_range:.2f}% > {max_range:.2f}%")
     if recent12_move > max_trend:
-        return None
+        fail_reasons.append(f"12봉 순이동 초과 {recent12_move:.2f}% > {max_trend:.2f}%")
     if recent6_surge > max_surge:
-        return None
+        fail_reasons.append(f"최근6봉 과열 {recent6_surge:.2f}% > {max_surge:.2f}%")
     if last2_move > max_last2:
-        return None
+        fail_reasons.append(f"직전2봉 추격 위험 {last2_move:.2f}% > {max_last2:.2f}%")
     if max_single_range > max_single:
-        return None
+        fail_reasons.append(f"단일캔들 과대 {max_single_range:.2f}% > {max_single:.2f}%")
     if support_touches < min_support:
-        return None
-    if volume_ratio < vol_min or volume_ratio > vol_max:
-        return None
+        fail_reasons.append(f"지지터치 부족 {support_touches}회 < {min_support}회")
+    if volume_ratio < vol_min:
+        fail_reasons.append(f"거래량 부족 {volume_ratio:.2f}x < {vol_min:.2f}x")
+    if volume_ratio > vol_max:
+        fail_reasons.append(f"거래량 과다 {volume_ratio:.2f}x > {vol_max:.2f}x")
     if basis_pct is not None and abs(basis_pct) > max_basis:
-        return None
+        fail_reasons.append(f"괴리율 초과 {basis_pct:.3f}% > ±{max_basis:.2f}%")
     if price_above_support > max_above_support:
-        return None
+        fail_reasons.append(f"지지선 이격 초과 {price_above_support:.2f}% > {max_above_support:.2f}%")
     if not relaxed and not env_ok:
-        return None
+        fail_reasons.append(f"1h환경 부적합({env_reason})")
     if score < min_score:
+        fail_reasons.append(f"점수 부족 {score} < {min_score}")
+
+    if fail_reasons:
+        log_candidate_fail(
+            symbol,
+            mode,
+            fail_reasons,
+            {
+                "score": score,
+                "recent12_range": recent12_range,
+                "recent12_move": recent12_move,
+                "recent6_surge": recent6_surge,
+                "last2_move": last2_move,
+                "max_single_range": max_single_range,
+                "compression_ratio": compression_ratio,
+                "volume_ratio": volume_ratio,
+                "support_touches": support_touches,
+                "price_above_support": price_above_support,
+                "basis_pct": basis_pct,
+                "env_ok": env_ok,
+            },
+        )
         return None
 
     return {
@@ -694,7 +756,7 @@ def scan_candidates(symbols: List[str], ticker_map: Optional[Dict[str, dict]] = 
             candidate = detect_candidate(symbol, ticker_map=ticker_map, relaxed=is_focus)
             if not candidate:
                 label = "온체인집중 제외" if is_focus else "제외"
-                print(f"[CANDIDATE] {symbol} | {label}", flush=True)
+                print(f"[CANDIDATE] {symbol} | {label} (상세 이유는 CANDIDATE FAIL 참고)", flush=True)
                 continue
             if is_focus:
                 candidate["onchain_focus"] = ONCHAIN_FOCUS_SYMBOLS.get(symbol, {})
