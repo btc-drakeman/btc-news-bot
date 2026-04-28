@@ -30,7 +30,7 @@ LAST_FUTURES_TICKER_TIME = 0.0
 FUTURES_TICKER_CACHE: Dict[str, dict] = {}
 LAST_CANDIDATE_CANDLE_TS = 0
 
-SIGNAL_INTERVAL = 60
+SIGNAL_INTERVAL = 120
 ONCHAIN_INTERVAL = 300
 CANDIDATE_ALERT_COOLDOWN = 7200
 ONCHAIN_CHART_COOLDOWN = 1800
@@ -40,7 +40,7 @@ ONCHAIN_FOCUS_TTL = 2 * 60 * 60  # 온체인 거래소 유입 후 2시간 집중
 ONCHAIN_FOCUS_MAX_AGE = 12 * 60 * 60  # CSV에서 최근 12시간 이내 flow만 등록
 ONCHAIN_FOCUS_SYMBOLS: Dict[str, dict] = {}
 SYMBOL_REFRESH_INTERVAL = 900
-TOP_SYMBOL_COUNT = 50
+TOP_SYMBOL_COUNT = 20
 FUTURES_TICKER_REFRESH_INTERVAL = 20
 
 SIGNAL_INTERVAL_5M = "5m"
@@ -215,7 +215,7 @@ def get_futures_bases() -> Set[str]:
     return futures
 
 
-def get_top_symbols(n: int = 50) -> List[str]:
+def get_top_symbols(n: int = 20) -> List[str]:
     url = "https://api.mexc.com/api/v3/ticker/24hr"
     data = requests.get(url, timeout=10).json()
 
@@ -244,7 +244,7 @@ def update_symbols_if_needed(force: bool = False) -> List[str]:
     if not force and CURRENT_SYMBOLS and (now - LAST_SYMBOL_UPDATE_TIME) < SYMBOL_REFRESH_INTERVAL:
         return CURRENT_SYMBOLS
 
-    print("[SYMBOL UPDATE] Top50 재선정 시작", flush=True)
+    print("[SYMBOL UPDATE] Top20 재선정 시작", flush=True)
     new_symbols = get_final_symbols()
 
     added = sorted(set(new_symbols) - set(CURRENT_SYMBOLS))
@@ -615,7 +615,7 @@ def send_candidate_alert(candidates: List[dict], candle_ts: int) -> None:
         return
 
     shown_count = min(len(candidates), CANDIDATE_MAX_PER_ALERT)
-    lines = [f"[TOP50 선별 매집 후보] 상위 {shown_count}개 / 통과 {len(candidates)}개"]
+    lines = [f"[TOP20 선별 매집 후보] 상위 {shown_count}개 / 통과 {len(candidates)}개"]
     for idx, c in enumerate(candidates[:CANDIDATE_MAX_PER_ALERT], 1):
         reason_text = ", ".join(c["reasons"][:5])
         focus = c.get("onchain_focus") or {}
@@ -1141,7 +1141,7 @@ def analyze_onchain_chart_candidates() -> None:
                 trigger = "강한 허브 + 후보"
 
             send_telegram(
-                f"[ONCHAIN+TOP50 후보] {symbol}\n"
+                f"[ONCHAIN+TOP20 후보] {symbol}\n"
                 f"트리거: {trigger}\n"
                 f"token: {token_symbol} ({token_name})\n"
                 f"seed: {seed}\n"
