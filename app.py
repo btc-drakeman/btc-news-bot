@@ -31,7 +31,7 @@ FUTURES_TICKER_CACHE: Dict[str, dict] = {}
 LAST_CANDIDATE_CANDLE_TS = 0
 
 SIGNAL_INTERVAL = 60
-ONCHAIN_INTERVAL = 600
+ONCHAIN_INTERVAL = 300
 CANDIDATE_ALERT_COOLDOWN = 7200
 ONCHAIN_CHART_COOLDOWN = 1800
 ONCHAIN_DETAIL_CSV = "seed_outflows_hub_candidates.csv"
@@ -868,13 +868,21 @@ def run_onchain() -> None:
             "eth_repeat_wallet_mvp.py",
             "--seeds", "seed_addresses.txt",
             "--chainid", "1",
-            "--days", "30",
+            # 실시간 알림용 경량 세팅: 30일 재분석 대신 최근 1일만 확인
+            "--days", "1",
             "--max-pages", "1",
+            "--offset", "50",
+            "--sleep-sec", "0.2",
             "--address-book", "address_book.json",
+            # flow는 유지하되, 확장 추적 대상/깊이를 제한
             "--enable-flow",
             "--flow-expand-max-pages", "1",
+            "--flow-max-track-addrs", "5",
+            "--flow-alert-max-age-hours", "3",
+            "--flow-max-alerts-per-run", "3",
+            # 활성 허브도 핵심 5개만 얕게 감시
             "--enable-active-hubs",
-            "--active-hub-max-track", "10",
+            "--active-hub-max-track", "5",
             "--active-hub-scan-max-pages", "1",
         ]
 
@@ -883,7 +891,7 @@ def run_onchain() -> None:
 
         eth = subprocess.run(
             cmd,
-            timeout=300,
+            timeout=240,
         )
 
         print(f"[ONCHAIN][ETH] code={eth.returncode}", flush=True)
@@ -897,7 +905,7 @@ def run_onchain() -> None:
         print("[ONCHAIN] 종료", flush=True)
 
     except subprocess.TimeoutExpired:
-        print("[ONCHAIN] TIMEOUT: 300초 초과로 강제 종료", flush=True)
+        print("[ONCHAIN] TIMEOUT: 240초 초과로 강제 종료", flush=True)
         traceback.print_exc()
     except Exception as e:
         print(f"[ONCHAIN] 오류: {e}", flush=True)
