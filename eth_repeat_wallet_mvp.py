@@ -19,6 +19,12 @@ import requests
 API_URL = "https://api.etherscan.io/v2/api"
 METADATA_API_V1_URL = "https://api-metadata.etherscan.io/v1/api.ashx"
 DB_PATH = "repeat_wallets.db"
+AUTO_SEEDS_PATH_DEFAULT = "auto_seeds.json"
+AUTO_SEEDS_MAX_DEFAULT = 20
+AUTO_SEEDS_TTL_HOURS_DEFAULT = 72
+AUTO_SEEDS_RECENT_HOURS_DEFAULT = 48
+AUTO_SEEDS_MIN_SHARED_DEFAULT = 2
+AUTO_SEEDS_MIN_SCORE_DEFAULT = 15
 
 ADDRESS_BOOK_PATH_DEFAULT = "address_book.json"
 ADDRESS_BOOK_RELOAD_SECONDS_DEFAULT = 60
@@ -421,6 +427,124 @@ def read_seed_addresses(path: str) -> List[str]:
     if not seeds:
         raise ValueError("시드 주소가 없습니다. seed 파일을 확인하세요.")
     return list(dict.fromkeys(seeds))
+
+
+def load_auto_seed_records(path: str) -> Dict[str, dict]:
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception as e:
+        print(f"[AUTO-SEED] 로드 실패, 빈 목록으로 시작: {e}", flush=True)
+        return {}
+    raw_items = payload.get("seeds", []) if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+    records: Dict[str, dict] = {}
+    for item in raw_items:
+        if isinstance(item, str):
+            addr, meta = normalize(item), {}
+        elif isinstance(item, dict):
+            addr, meta = normalize(str(item.get("address") or item.get("seed") or "")), dict(item)
+        else:
+            continue
+        if addr:
+            meta["address"] = addr
+            records[addr] = meta
+    return records
+
+
+def save_auto_seed_records(path: str, records: Dict[str, dict], max_auto_seeds: int, ttl_hours: int, recent_hours: int, min_shared: int, min_score: int) -> None:
+    items = sorted(records.values(), key=lambda x: (int(x.get("last_seen_at") or 0), int(x.get("score") or 0)), reverse=True)[:max(0, int(max_auto_seeds))]
+    payload = {
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "count": len(items),
+        "max_auto_seeds": max_auto_seeds,
+        "rules": {"ttl_hours": ttl_hours, "recent_hours": recent_hours, "min_shared": min_shared, "min_score": min_score, "exclude": ["protocol", "exchange", "ignore"]},
+        "seeds": items,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def prune_auto_seed_records(records: Dict[str, dict], manual_seeds: Set[str], now_ts: Optional[int] = None) -> Dict[str, dict]:
+    now_ts = now_ts or utc_now_ts()
+    kept: Dict[str, dict] = {}
+    for addr, meta in records.items():
+        addr = normalize(addr)
+        if not addr or addr in manual_seeds or addr in IGNORE_ADDRESSES:
+            continue
+        if int(meta.get("expires_at") or 0) and int(meta.get("expires_at") or 0) <= now_ts:
+            continue
+        if str(meta.get("target_kind") or "unknown").lower() in {"protocol", "exchange", "ignore"}:
+            continue
+        meta["address"] = addr
+        kept[addr] = meta
+    return kept
+
+
+def get_active_auto_seeds(path: str, manual_seeds: Set[str], max_auto_seeds: int) -> List[str]:
+    records = prune_auto_seed_records(load_auto_seed_records(path), manual_seeds)
+    ranked = sorted(records.values(), key=lambda x: (int(x.get("last_seen_at") or 0), int(x.get("score") or 0)), reverse=True)[:max(0, int(max_auto_seeds))]
+    return [normalize(x["address"]) for x in ranked if normalize(x.get("address", ""))]
+
+
+def get_candidate_last_seen_map(conn: sqlite3.Connection, chainid: str, days: int, candidate_addresses: List[str]) -> Dict[str, int]:
+    if not candidate_addresses:
+        return {}
+    cutoff = utc_now_ts() - max(1, int(days)) * 86400
+    cur = conn.cursor()
+    out: Dict[str, int] = {}
+    for addr in candidate_addresses:
+        addr = normalize(addr)
+        row = cur.execute("SELECT MAX(timestamp) FROM transfers WHERE chainid = ? AND timestamp >= ? AND (from_addr = ? OR to_addr = ?)", (chainid, cutoff, addr, addr)).fetchone()
+        if row and row[0]:
+            out[addr] = int(row[0])
+    return out
+
+
+def update_auto_seeds_from_hubs(conn: sqlite3.Connection, hub_rows: List[dict], chainid: str, days: int, path: str, manual_seeds: Set[str], max_auto_seeds: int, ttl_hours: int, recent_hours: int, min_shared: int, min_score: int) -> Tuple[int, int]:
+    now_ts = utc_now_ts()
+    records = prune_auto_seed_records(load_auto_seed_records(path), manual_seeds, now_ts=now_ts)
+    last_seen_map = get_candidate_last_seen_map(conn, chainid, days=max(days, 2), candidate_addresses=[normalize(r.get("address", "")) for r in hub_rows if r.get("address")])
+    recent_cutoff = now_ts - max(1, int(recent_hours)) * 3600
+    added = updated = 0
+    for row in hub_rows:
+        addr = normalize(row.get("address") or "")
+        if not addr or addr in manual_seeds or addr in IGNORE_ADDRESSES:
+            continue
+        target_kind = str(row.get("target_kind") or "unknown").lower()
+        if target_kind in {"protocol", "exchange", "ignore"}:
+            continue
+        shared = int(row.get("shared_seed_count") or 0)
+        score = int(row.get("score") or 0)
+        if not (shared >= min_shared or score >= min_score):
+            continue
+        last_seen_at = int(last_seen_map.get(addr) or 0)
+        if not last_seen_at or last_seen_at < recent_cutoff:
+            continue
+        prev = records.get(addr)
+        expires_at = now_ts + max(1, int(ttl_hours)) * 3600
+        records[addr] = {
+            "address": addr,
+            "added_at": int(prev.get("added_at")) if prev and prev.get("added_at") else now_ts,
+            "updated_at": now_ts,
+            "last_seen_at": last_seen_at,
+            "last_seen_utc": datetime.fromtimestamp(last_seen_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "expires_at": expires_at,
+            "expires_utc": datetime.fromtimestamp(expires_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            "shared_seed_count": shared,
+            "score": score,
+            "total_interactions": int(row.get("total_interactions") or 0),
+            "target_kind": target_kind,
+            "target_label": row.get("target_label") or row.get("label") or "",
+            "exchange_hits": row.get("exchange_hits") or "",
+            "source": "hub_candidates",
+        }
+        if prev: updated += 1
+        else: added += 1
+    save_auto_seed_records(path, records, max_auto_seeds=max_auto_seeds, ttl_hours=ttl_hours, recent_hours=recent_hours, min_shared=min_shared, min_score=min_score)
+    print(f"[AUTO-SEED] 추가={added} 갱신={updated} 현재={len(load_auto_seed_records(path))} 파일={os.path.abspath(path)}", flush=True)
+    return added, updated
 
 
 def etherscan_get(params: Dict[str, str], timeout: int = 20) -> dict:
@@ -1987,6 +2111,12 @@ def run_active_hub_fast_scan_loop(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Etherscan V2 반복 지갑 탐지 MVP + light flow tracker + active hub watcher")
     parser.add_argument("--seeds", required=True, help="시드 주소 txt 파일 경로")
+    parser.add_argument("--auto-seeds", default=AUTO_SEEDS_PATH_DEFAULT, help="자동 임시 시드 JSON 파일 경로")
+    parser.add_argument("--auto-seeds-max", type=int, default=AUTO_SEEDS_MAX_DEFAULT, help="자동 시드 최대 유지 개수")
+    parser.add_argument("--auto-seeds-ttl-hours", type=int, default=AUTO_SEEDS_TTL_HOURS_DEFAULT, help="자동 시드 TTL 시간")
+    parser.add_argument("--auto-seeds-recent-hours", type=int, default=AUTO_SEEDS_RECENT_HOURS_DEFAULT, help="자동 시드 후보 최근 등장 허용 시간")
+    parser.add_argument("--auto-seeds-min-shared", type=int, default=AUTO_SEEDS_MIN_SHARED_DEFAULT, help="자동 시드 등록 최소 shared")
+    parser.add_argument("--auto-seeds-min-score", type=int, default=AUTO_SEEDS_MIN_SCORE_DEFAULT, help="자동 시드 등록 최소 score")
     parser.add_argument("--chainid", default="1", help="EVM chainid. Ethereum=1")
     parser.add_argument("--days", type=int, default=30, help="최근 며칠 데이터 볼지")
     parser.add_argument("--offset", type=int, default=100, help="페이지당 전송 수")
@@ -2032,8 +2162,11 @@ def main() -> int:
     dbg("주소록 로드 완료")
 
     dbg("seed 파일 읽기 시작")
-    seeds = read_seed_addresses(args.seeds)
-    dbg(f"seed 파일 읽기 완료 count={len(seeds)}")
+    manual_seeds = read_seed_addresses(args.seeds)
+    manual_seed_set = set(manual_seeds)
+    auto_seed_list = get_active_auto_seeds(args.auto_seeds, manual_seed_set, args.auto_seeds_max)
+    seeds = list(dict.fromkeys(manual_seeds + auto_seed_list))
+    dbg(f"seed 파일 읽기 완료 manual={len(manual_seeds)} auto={len(auto_seed_list)} total={len(seeds)}")
 
     dbg(f"SQLite 연결 시작 path={DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
@@ -2052,7 +2185,7 @@ def main() -> int:
             print(f"[ADDR][BOOTSTRAP] 추가된 거래소 주소 수: {added}", flush=True)
 
     print(f"[INFO] address_book={os.path.abspath(args.address_book)}")
-    print(f"[INFO] seed 수: {len(seeds)}")
+    print(f"[INFO] seed 수: {len(seeds)} (manual={len(manual_seeds)}, auto={len(auto_seed_list)})")
     print(f"[INFO] chainid={args.chainid}, days={args.days}, offset={args.offset}, max_pages={args.max_pages}")
 
     total_saved = 0
@@ -2095,6 +2228,20 @@ def main() -> int:
     dbg(f"허브 CSV 저장 시작 path={args.csv}")
     export_csv(args.csv, rows)
     dbg("허브 CSV 저장 완료")
+
+    update_auto_seeds_from_hubs(
+        conn=conn,
+        hub_rows=rows,
+        chainid=args.chainid,
+        days=max(args.days, 2),
+        path=args.auto_seeds,
+        manual_seeds=manual_seed_set,
+        max_auto_seeds=args.auto_seeds_max,
+        ttl_hours=args.auto_seeds_ttl_hours,
+        recent_hours=args.auto_seeds_recent_hours,
+        min_shared=args.auto_seeds_min_shared,
+        min_score=args.auto_seeds_min_score,
+    )
 
     print("\n=== 상위 허브 후보 ===", flush=True)
     for row in rows[: args.top]:
@@ -2276,6 +2423,7 @@ def main() -> int:
         print(f"[INFO] active hub 목록 CSV 저장: {active_hub_csv}")
         print(f"[INFO] active hub 이벤트 CSV 저장: {active_hub_scan_csv}")
     print(f"[INFO] address book JSON: {os.path.abspath(args.address_book)}")
+    print(f"[INFO] auto seeds JSON: {os.path.abspath(args.auto_seeds)}")
     print(f"[INFO] SQLite DB 저장: {DB_PATH}")
 
     if initial_bootstrap_mode:

@@ -81,6 +81,7 @@ DOWNLOADABLE_ONCHAIN_FILES = {
     "active_hub_events_hub_candidates.csv": "활성 허브 이벤트",
     "repeat_wallets.db": "SQLite 원본 DB",
     "address_book.json": "수동 거래소 주소록",
+    "auto_seeds.json": "자동 임시 시드 목록",
 }
 
 
